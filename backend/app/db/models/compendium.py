@@ -12,9 +12,6 @@ from app.db.base import Base
 from app.enums import CreatureSize
 
 
-# ---------------------------------------------------------------------------
-# Lookup tables  (string PKs — the name IS the identity)
-# ---------------------------------------------------------------------------
 
 class AbilityScoreOption(Base):
     __tablename__ = "ability_score_options"
@@ -81,10 +78,6 @@ spell_class_lists = Table(
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
 )
 
-
-# ---------------------------------------------------------------------------
-# Main compendium models
-# ---------------------------------------------------------------------------
 
 class FeatureGrant(Base):
     """

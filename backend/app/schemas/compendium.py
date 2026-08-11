@@ -110,6 +110,7 @@ class SubclassOut(BaseModel):
 
     id: uuid.UUID
     class_id: uuid.UUID
+    class_name: str
     name: str
     description: str | None
     source: str

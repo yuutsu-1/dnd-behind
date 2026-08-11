@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.compendium import (
@@ -128,7 +129,7 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
 
 @router.get("/subclasses", response_model=list[SubclassOut])
 async def list_subclasses(db: DB, class_id: uuid.UUID | None = Query(default=None)):
-    q = select(SubclassDefinition)
+    q = select(SubclassDefinition).options(selectinload(SubclassDefinition.class_def))
     if class_id:
         q = q.where(SubclassDefinition.class_id == class_id)
     result = await db.execute(q)
@@ -140,7 +141,7 @@ async def create_subclass(data: SubclassCreate, current_user: CurrentUser, db: D
     obj = SubclassDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
     db.add(obj)
     await db.commit()
-    await db.refresh(obj)
+    await db.refresh(obj, attribute_names=["class_def"])
     return obj
 
 

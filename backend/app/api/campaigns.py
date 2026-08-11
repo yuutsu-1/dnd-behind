@@ -3,6 +3,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.campaign import Campaign, CampaignMember
@@ -28,6 +29,7 @@ async def create_campaign(data: CampaignCreate, current_user: CurrentUser, db: D
     db.add(membership)
     await db.commit()
     await db.refresh(campaign)
+    campaign.creator = current_user
     return campaign
 
 
@@ -37,6 +39,7 @@ async def list_my_campaigns(current_user: CurrentUser, db: DB):
         select(Campaign)
         .join(CampaignMember, CampaignMember.campaign_id == Campaign.id)
         .where(CampaignMember.user_id == current_user.id)
+        .options(selectinload(Campaign.creator))
     )
     return list(result.scalars().all())
 
@@ -47,6 +50,7 @@ async def get_campaign(campaign_id: uuid.UUID, current_user: CurrentUser, db: DB
         select(Campaign)
         .join(CampaignMember, CampaignMember.campaign_id == Campaign.id)
         .where(Campaign.id == campaign_id, CampaignMember.user_id == current_user.id)
+        .options(selectinload(Campaign.creator))
     )
     campaign = result.scalar_one_or_none()
     if not campaign:
@@ -66,7 +70,9 @@ async def update_campaign(campaign_id: uuid.UUID, data: CampaignUpdate, current_
     if not dm_check.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="DM access required")
 
-    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
+    result = await db.execute(
+        select(Campaign).where(Campaign.id == campaign_id).options(selectinload(Campaign.creator))
+    )
     campaign = result.scalar_one_or_none()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -99,6 +105,8 @@ async def join_campaign(data: JoinRequest, current_user: CurrentUser, db: DB):
     db.add(member)
     await db.commit()
     await db.refresh(member)
+    member.user = current_user
+    member.campaign = campaign
     return member
 
 
@@ -114,6 +122,8 @@ async def list_members(campaign_id: uuid.UUID, current_user: CurrentUser, db: DB
         raise HTTPException(status_code=403, detail="Not a member of this campaign")
 
     result = await db.execute(
-        select(CampaignMember).where(CampaignMember.campaign_id == campaign_id)
+        select(CampaignMember)
+        .where(CampaignMember.campaign_id == campaign_id)
+        .options(selectinload(CampaignMember.user), selectinload(CampaignMember.campaign))
     )
     return list(result.scalars().all())

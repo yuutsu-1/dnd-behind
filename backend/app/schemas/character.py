@@ -3,21 +3,18 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-
-# ---------------------------------------------------------------------------
-# Inventory
-# ---------------------------------------------------------------------------
-
 class InventoryItemOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
     item_id: uuid.UUID
+    item_name: str
     quantity: int
     equipped: bool
     attuned: bool
     custom_notes: str | None
     added_by: uuid.UUID | None
+    added_by_name: str | None
     added_at: datetime
 
 
@@ -32,11 +29,6 @@ class UpdateInventoryItem(BaseModel):
     equipped: bool | None = None
     attuned: bool | None = None
     custom_notes: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Character
-# ---------------------------------------------------------------------------
 
 _ABILITY_SCORES_DEFAULT = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
 
@@ -73,7 +65,6 @@ class CharacterUpdate(BaseModel):
 
 
 class HPUpdate(BaseModel):
-    """Convenience body for quick HP changes from the DM panel."""
     delta: int  # positive = heal, negative = damage
     is_temp: bool = False  # True = apply to temp HP instead
 
@@ -83,14 +74,20 @@ class CharacterOut(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
+    user_name: str
     campaign_id: uuid.UUID | None
+    campaign_name: str | None
     name: str
     level: int
     experience_points: int
     species_id: uuid.UUID | None
+    species_name: str | None
     background_id: uuid.UUID | None
+    background_name: str | None
     class_id: uuid.UUID | None
+    class_name: str | None
     subclass_id: uuid.UUID | None
+    subclass_name: str | None
     ability_scores: dict
     current_hp: int
     max_hp: int
@@ -113,13 +110,7 @@ class CharacterOut(BaseModel):
 class CharacterWithInventory(CharacterOut):
     inventory: list[InventoryItemOut] = Field(default_factory=list)
 
-
-# ---------------------------------------------------------------------------
-# WebSocket events
-# ---------------------------------------------------------------------------
-
 class WSEvent(BaseModel):
-    """Envelope for all WebSocket messages in a campaign room."""
     event: str
     character_id: uuid.UUID | None = None
     payload: dict = Field(default_factory=dict)

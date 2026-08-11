@@ -10,11 +10,24 @@ from app.db.models.campaign import CampaignMember
 from app.schemas.character import AddItemRequest, CharacterCreate, CharacterUpdate, HPUpdate
 
 
+def _character_eager_load_options() -> list:
+    return [
+        selectinload(Character.owner),
+        selectinload(Character.campaign),
+        selectinload(Character.species),
+        selectinload(Character.background),
+        selectinload(Character.character_class),
+        selectinload(Character.subclass),
+        selectinload(Character.inventory).selectinload(CharacterInventory.item),
+        selectinload(Character.inventory).selectinload(CharacterInventory.added_by_user),
+    ]
+
+
 async def get_character_or_404(db: AsyncSession, character_id: uuid.UUID) -> Character:
     result = await db.execute(
         select(Character)
         .where(Character.id == character_id, Character.is_active == True)  # noqa: E712
-        .options(selectinload(Character.inventory))
+        .options(*_character_eager_load_options())
     )
     character = result.scalar_one_or_none()
     if not character:
@@ -63,7 +76,10 @@ async def create_character(
     )
     db.add(character)
     await db.commit()
-    await db.refresh(character)
+    await db.refresh(
+        character,
+        attribute_names=["owner", "campaign", "species", "background", "character_class", "subclass"],
+    )
     return character
 
 
@@ -87,7 +103,6 @@ async def apply_hp_update(
     if update.is_temp:
         character.temp_hp = max(0, character.temp_hp + update.delta)
     else:
-        # Damage absorbs temp HP first
         if update.delta < 0:
             absorbed = min(character.temp_hp, abs(update.delta))
             character.temp_hp -= absorbed
@@ -116,7 +131,7 @@ async def add_item(
     )
     db.add(entry)
     await db.commit()
-    await db.refresh(entry)
+    await db.refresh(entry, attribute_names=["item", "added_by_user"])
     return entry
 
 
@@ -147,6 +162,6 @@ async def list_characters_for_campaign(
     result = await db.execute(
         select(Character)
         .where(Character.campaign_id == campaign_id, Character.is_active == True)  # noqa: E712
-        .options(selectinload(Character.inventory))
+        .options(*_character_eager_load_options())
     )
     return list(result.scalars().all())

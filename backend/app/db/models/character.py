@@ -33,16 +33,16 @@ class Character(Base):
     temp_hp: Mapped[int]                    = mapped_column(Integer, nullable=False, default=0)
     death_saves: Mapped[dict]               = mapped_column(JSONB, nullable=False, default=lambda: {"successes": 0, "failures": 0})
 
-    hit_dice_remaining: Mapped[dict]        = mapped_column(JSONB, nullable=False, default=dict)
+    hit_dice_remaining: Mapped[dict]        = mapped_column(JSONB, nullable=False, default=dict) #TODO: Ao invés de dict, mapear usos. Hit die vai ficar amarrado na classe
 
     conditions: Mapped[list]                = mapped_column(JSONB, nullable=False, default=list)
     exhaustion_level: Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
     inspiration: Mapped[bool]               = mapped_column(Boolean, default=False)
-    choices: Mapped[dict]                   = mapped_column(JSONB, nullable=False, default=dict)
+    choices: Mapped[dict]                   = mapped_column(JSONB, nullable=False, default=dict) #TODO: Criar tabela de traços de classes e especies ganhos por nível e se um traço é múltipla escolha então salvarei o traço escolhido em outra tabela de many to one.
     spell_slots_remaining: Mapped[dict]     = mapped_column(JSONB, nullable=False, default=dict)
     appearance: Mapped[dict]                = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[str | None]               = mapped_column(Text)
-    custom_data: Mapped[dict]               = mapped_column(JSONB, nullable=False, default=dict)
+    custom_data: Mapped[dict]               = mapped_column(JSONB, nullable=False, default=dict) #TODO: Vai virar a tabela de traços de classes e especies
 
     is_active: Mapped[bool]                 = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime]            = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -51,10 +51,38 @@ class Character(Base):
 
     owner: Mapped["User"]                   = relationship(back_populates="characters")  # noqa: F821
     campaign: Mapped["Campaign"]            = relationship(back_populates="characters")  # noqa: F821
+    species: Mapped["SpeciesDefinition"]    = relationship(foreign_keys=[species_id])  # noqa: F821
+    background: Mapped["BackgroundDefinition"] = relationship(foreign_keys=[background_id])  # noqa: F821
+    character_class: Mapped["ClassDefinition"] = relationship(foreign_keys=[class_id])  # noqa: F821
+    subclass: Mapped["SubclassDefinition"]  = relationship(foreign_keys=[subclass_id])  # noqa: F821
     inventory: Mapped[list["CharacterInventory"]] = relationship(back_populates="character", cascade="all, delete-orphan")
     feats: Mapped[list["CharacterFeat"]]    = relationship(back_populates="character", cascade="all, delete-orphan")
     spells: Mapped[list["CharacterSpell"]]  = relationship(back_populates="character", cascade="all, delete-orphan")
     resources: Mapped[list["CharacterResource"]]  = relationship(back_populates="character", cascade="all, delete-orphan")
+
+    @property
+    def user_name(self) -> str | None:
+        return self.owner.username if self.owner else None
+
+    @property
+    def campaign_name(self) -> str | None:
+        return self.campaign.name if self.campaign else None
+
+    @property
+    def species_name(self) -> str | None:
+        return self.species.name if self.species else None
+
+    @property
+    def background_name(self) -> str | None:
+        return self.background.name if self.background else None
+
+    @property
+    def class_name(self) -> str | None:
+        return self.character_class.name if self.character_class else None
+
+    @property
+    def subclass_name(self) -> str | None:
+        return self.subclass.name if self.subclass else None
 
 
 class CharacterInventory(Base):
@@ -72,6 +100,15 @@ class CharacterInventory(Base):
 
     character: Mapped["Character"]     = relationship(back_populates="inventory")
     item: Mapped["ItemDefinition"]     = relationship()  # noqa: F821
+    added_by_user: Mapped["User"]      = relationship(foreign_keys=[added_by])  # noqa: F821
+
+    @property
+    def item_name(self) -> str | None:
+        return self.item.name if self.item else None
+
+    @property
+    def added_by_name(self) -> str | None:
+        return self.added_by_user.username if self.added_by_user else None
 
 
 class CharacterFeat(Base):

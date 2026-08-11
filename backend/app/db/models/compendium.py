@@ -164,6 +164,10 @@ class SubclassDefinition(Base):
 
     class_def: Mapped["ClassDefinition"] = relationship(back_populates="subclasses")
 
+    @property
+    def class_name(self) -> str | None:
+        return self.class_def.name if self.class_def else None
+
 
 class BackgroundDefinition(Base):
     __tablename__ = "background_definitions"

@@ -117,7 +117,10 @@ class TestCreateCharacter:
         assert character.appearance == data.appearance
         assert character.notes == "A ranger"
         fake_db.commit.assert_awaited_once()
-        fake_db.refresh.assert_awaited_once_with(character)
+        fake_db.refresh.assert_awaited_once_with(
+            character,
+            attribute_names=["owner", "campaign", "species", "background", "character_class", "subclass"],
+        )
 
     async def test_campaign_id_optional_defaults_to_none(self, fake_db):
         data = CharacterCreate(name="Solo Hero")
@@ -226,7 +229,8 @@ class TestAddItem:
         assert entry.custom_notes == "shiny"
         assert entry.added_by == added_by
         fake_db.commit.assert_awaited_once()
-        fake_db.refresh.assert_awaited_once_with(entry)
+
+        fake_db.refresh.assert_awaited_once_with(entry, attribute_names=["item", "added_by_user"])
 
 
 class TestRemoveItem:

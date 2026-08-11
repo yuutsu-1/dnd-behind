@@ -2,10 +2,11 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.campaign import CampaignMember
-from app.db.models.character import Character
+from app.db.models.character import Character, CharacterInventory
 from app.schemas.character import (
     AddItemRequest,
     CharacterCreate,
@@ -44,9 +45,18 @@ async def create_character(data: CharacterCreate, current_user: CurrentUser, db:
 @router.get("/me", response_model=list[CharacterOut])
 async def my_characters(current_user: CurrentUser, db: DB):
     result = await db.execute(
-        select(Character).where(
+        select(Character)
+        .where(
             Character.user_id == current_user.id,
             Character.is_active == True,  # noqa: E712
+        )
+        .options(
+            selectinload(Character.owner),
+            selectinload(Character.campaign),
+            selectinload(Character.species),
+            selectinload(Character.background),
+            selectinload(Character.character_class),
+            selectinload(Character.subclass),
         )
     )
     return list(result.scalars().all())
@@ -134,16 +144,18 @@ async def update_inventory_item(
     current_user: CurrentUser,
     db: DB,
 ):
-    from sqlalchemy.orm import selectinload
-    from app.db.models.character import CharacterInventory
-
     character = await char_service.get_character_or_404(db, character_id)
     await char_service.assert_owner_or_dm(db, character, current_user.id)
 
     result = await db.execute(
-        select(CharacterInventory).where(
+        select(CharacterInventory)
+        .where(
             CharacterInventory.id == inventory_id,
             CharacterInventory.character_id == character_id,
+        )
+        .options(
+            selectinload(CharacterInventory.item),
+            selectinload(CharacterInventory.added_by_user),
         )
     )
     entry = result.scalar_one_or_none()

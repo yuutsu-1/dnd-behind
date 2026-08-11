@@ -27,6 +27,7 @@ class CampaignOut(BaseModel):
     is_active: bool
     settings: dict
     created_by: uuid.UUID
+    created_by_name: str
     created_at: datetime
 
 
@@ -35,7 +36,9 @@ class MemberOut(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
+    user_name: str
     campaign_id: uuid.UUID
+    campaign_name: str
     role: str
     joined_at: datetime
 

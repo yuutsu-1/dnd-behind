@@ -9,13 +9,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-# Make sure app is importable from the backend/ directory
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.core.config import settings
 from app.db.base import Base
 
-# Import every model so SQLAlchemy registers them with Base.metadata
 import app.db.models  # noqa: F401
 
 config = context.config

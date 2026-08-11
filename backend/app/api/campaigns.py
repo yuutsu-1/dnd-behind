@@ -23,7 +23,7 @@ async def create_campaign(data: CampaignCreate, current_user: CurrentUser, db: D
     db.add(campaign)
     await db.flush()
 
-    # Creator automatically becomes DM
+    # Quem criou a campanha vira o DM automaticamente
     membership = CampaignMember(campaign_id=campaign.id, user_id=current_user.id, role="dm")
     db.add(membership)
     await db.commit()

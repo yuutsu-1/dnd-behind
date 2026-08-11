@@ -38,8 +38,6 @@ class TestGetCharacterOr404:
         assert exc_info.value.status_code == 404
 
     async def test_inactive_character_treated_as_not_found(self, fake_db):
-        # The query itself filters on is_active == True, so an inactive
-        # character is simulated as "no row found".
         fake_db.execute.return_value = make_result(scalar=None)
 
         with pytest.raises(HTTPException) as exc_info:

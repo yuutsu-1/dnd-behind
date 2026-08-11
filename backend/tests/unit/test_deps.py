@@ -93,8 +93,7 @@ class TestRequireCampaignDM:
     async def test_membership_with_different_role_raises_403(self, fake_db):
         current_user = make_user()
         campaign = make_campaign()
-        # Query filters by role == "dm"; a player membership would not match,
-        # simulated here as "no row found" for that filtered query.
+
         fake_db.execute.side_effect = [
             make_result(scalar=campaign),
             make_result(scalar=None),

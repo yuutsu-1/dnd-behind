@@ -110,9 +110,6 @@ async def delete_character(character_id: uuid.UUID, current_user: CurrentUser, d
     await db.commit()
 
 
-# ---------------------------------------------------------------------------
-# Inventory
-# ---------------------------------------------------------------------------
 
 @router.post("/{character_id}/inventory", response_model=InventoryItemOut, status_code=201)
 async def add_item(character_id: uuid.UUID, data: AddItemRequest, current_user: CurrentUser, db: DB):
@@ -178,10 +175,6 @@ async def remove_item(character_id: uuid.UUID, inventory_id: uuid.UUID, current_
         current_user.id,
     )
 
-
-# ---------------------------------------------------------------------------
-# Campaign-scoped view (DM sees all party characters)
-# ---------------------------------------------------------------------------
 
 @router.get("/campaign/{campaign_id}", response_model=list[CharacterWithInventory])
 async def campaign_characters(campaign_id: uuid.UUID, current_user: CurrentUser, db: DB):

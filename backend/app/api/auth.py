@@ -18,7 +18,6 @@ async def register(data: RegisterRequest, db: DB):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(form: Annotated[OAuth2PasswordRequestForm, Depends()], db: DB):
-    # OAuth2PasswordRequestForm uses 'username' field — we treat it as email
     return await auth_service.login(db, email=form.username, password=form.password)
 
 

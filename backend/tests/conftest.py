@@ -15,13 +15,6 @@ from app.db.models.user import RefreshToken, User  # noqa: E402
 
 
 class FakeResult:
-    """Stand-in for SQLAlchemy's `Result` object.
-
-    `db.execute(...)` is awaited and returns this object; `.scalar_one_or_none()`
-    and `.scalars().all()` are then called *synchronously* on it, mirroring the
-    real `Result` API used throughout `app/services/*.py` and `app/core/deps.py`.
-    """
-
     def __init__(self, scalar=None, scalars_list=None):
         self._scalar = scalar
         self._scalars_list = scalars_list if scalars_list is not None else []
@@ -40,14 +33,6 @@ def make_result(scalar=None, scalars_list=None) -> FakeResult:
 
 
 class FakeAsyncSession:
-    """Minimal async double for `AsyncSession`, shaped after the real usage:
-
-    - `execute` is awaited, returns a `FakeResult` (configurable per test via
-      `.execute.return_value` or `.execute.side_effect` for sequential calls).
-    - `add` is a plain (sync) call.
-    - `commit`/`refresh`/`flush`/`delete` are awaited.
-    """
-
     def __init__(self):
         self.execute = AsyncMock(return_value=make_result())
         self.add = MagicMock()

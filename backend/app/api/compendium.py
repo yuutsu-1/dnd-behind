@@ -33,17 +33,7 @@ from app.schemas.compendium import (
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
 
-
-# ---------------------------------------------------------------------------
-# Helper: resolve or create lookup-table rows by name
-# ---------------------------------------------------------------------------
-
 async def _resolve_options(db: AsyncSession, model, names: list[str]) -> list:
-    """
-    For each name, return the existing lookup-table row or create it.
-    This makes the API homebrew-friendly: any new string value becomes a valid
-    option automatically, while known values are reused (no duplicates).
-    """
     if not names:
         return []
     result = await db.execute(select(model).where(model.name.in_(names)))
@@ -59,10 +49,6 @@ async def _resolve_options(db: AsyncSession, model, names: list[str]) -> list:
             output.append(new_obj)
     return output
 
-
-# ---------------------------------------------------------------------------
-# Species
-# ---------------------------------------------------------------------------
 
 @router.get("/species", response_model=list[SpeciesOut])
 async def list_species(db: DB, search: str | None = Query(default=None)):
@@ -89,11 +75,6 @@ async def create_species(data: SpeciesCreate, current_user: CurrentUser, db: DB)
     await db.commit()
     await db.refresh(obj)
     return obj
-
-
-# ---------------------------------------------------------------------------
-# Classes
-# ---------------------------------------------------------------------------
 
 @router.get("/classes", response_model=list[ClassOut])
 async def list_classes(db: DB, search: str | None = Query(default=None)):
@@ -145,10 +126,6 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
     return obj
 
 
-# ---------------------------------------------------------------------------
-# Subclasses
-# ---------------------------------------------------------------------------
-
 @router.get("/subclasses", response_model=list[SubclassOut])
 async def list_subclasses(db: DB, class_id: uuid.UUID | None = Query(default=None)):
     q = select(SubclassDefinition)
@@ -167,10 +144,6 @@ async def create_subclass(data: SubclassCreate, current_user: CurrentUser, db: D
     return obj
 
 
-# ---------------------------------------------------------------------------
-# Backgrounds
-# ---------------------------------------------------------------------------
-
 @router.get("/backgrounds", response_model=list[BackgroundOut])
 async def list_backgrounds(db: DB, search: str | None = Query(default=None)):
     q = select(BackgroundDefinition)
@@ -187,11 +160,6 @@ async def create_background(data: BackgroundCreate, current_user: CurrentUser, d
     await db.commit()
     await db.refresh(obj)
     return obj
-
-
-# ---------------------------------------------------------------------------
-# Feats
-# ---------------------------------------------------------------------------
 
 @router.get("/feats", response_model=list[FeatOut])
 async def list_feats(
@@ -215,11 +183,6 @@ async def create_feat(data: FeatCreate, current_user: CurrentUser, db: DB):
     await db.commit()
     await db.refresh(obj)
     return obj
-
-
-# ---------------------------------------------------------------------------
-# Spells
-# ---------------------------------------------------------------------------
 
 @router.get("/spells", response_model=list[SpellOut])
 async def list_spells(
@@ -285,11 +248,6 @@ async def create_spell(data: SpellCreate, current_user: CurrentUser, db: DB):
     await db.refresh(obj)
     return obj
 
-
-# ---------------------------------------------------------------------------
-# Items
-# ---------------------------------------------------------------------------
-
 @router.get("/items", response_model=list[ItemOut])
 async def list_items(
     db: DB,
@@ -324,11 +282,6 @@ async def create_item(data: ItemCreate, current_user: CurrentUser, db: DB):
     await db.commit()
     await db.refresh(obj)
     return obj
-
-
-# ---------------------------------------------------------------------------
-# Feature Grants (power-user / homebrew endpoint)
-# ---------------------------------------------------------------------------
 
 @router.get("/feature-grants", response_model=list[FeatureGrantOut])
 async def list_feature_grants(

@@ -102,7 +102,7 @@ class CharacterSpell(Base):
 
 
 class CharacterResource(Base):
-    """Tracks current/max uses of named resources (Rage, Ki Points, Bardic Inspiration, ...)."""
+    """Registro usos do recurso (Rage, Ki Points, Bardic Inspiration, ...)."""
     __tablename__ = "character_resources"
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

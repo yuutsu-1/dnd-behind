@@ -72,7 +72,6 @@ async def refresh(db: AsyncSession, raw_refresh_token: str) -> TokenResponse:
     if not stored or stored.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked")
 
-    # Rotate: revoke old, issue new
     stored.revoked = True
     await db.flush()
 

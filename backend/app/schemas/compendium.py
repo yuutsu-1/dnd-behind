@@ -6,10 +6,6 @@ from pydantic import BaseModel, Field, field_validator
 from app.enums import AbilityScore, CreatureSize
 
 
-# ---------------------------------------------------------------------------
-# FeatureGrant
-# ---------------------------------------------------------------------------
-
 class FeatureGrantOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -37,10 +33,6 @@ class FeatureGrantCreate(BaseModel):
     sort_order: int = 0
 
 
-# ---------------------------------------------------------------------------
-# Species
-# ---------------------------------------------------------------------------
-
 class SpeciesOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -60,12 +52,7 @@ class SpeciesCreate(BaseModel):
     base_speed: int = 30
 
 
-# ---------------------------------------------------------------------------
-# Class
-# ---------------------------------------------------------------------------
-
-def _pluck(v: list) -> list:
-    """Convert a list of lookup-table ORM objects to their string names."""
+def _pluck(v: list) -> list: #pra casos das lookup tables, deixa a vida mais fácil
     if v and hasattr(v[0], "name"):
         return [item.name for item in v]
     return v
@@ -118,10 +105,6 @@ class ClassCreate(BaseModel):
     spellcasting_type: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Subclass
-# ---------------------------------------------------------------------------
-
 class SubclassOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -139,10 +122,6 @@ class SubclassCreate(BaseModel):
     description: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Background
-# ---------------------------------------------------------------------------
-
 class BackgroundOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -156,11 +135,6 @@ class BackgroundOut(BaseModel):
 class BackgroundCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Feat
-# ---------------------------------------------------------------------------
 
 class FeatOut(BaseModel):
     model_config = {"from_attributes": True}
@@ -184,11 +158,6 @@ class FeatCreate(BaseModel):
     prerequisite_description: str | None = None
     repeatable: bool = False
 
-
-# ---------------------------------------------------------------------------
-# Spell
-# ---------------------------------------------------------------------------
-
 class SpellOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -205,7 +174,6 @@ class SpellOut(BaseModel):
     ritual: bool
     description: str
     higher_levels: str | None
-    # Returns the names of ClassDefinition objects from the M2M relationship
     class_list: list[str]
     source: str
     is_homebrew: bool
@@ -231,11 +199,6 @@ class SpellCreate(BaseModel):
     higher_levels: str | None = None
     # IDs of existing ClassDefinition rows to link
     class_ids: list[uuid.UUID] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Item
-# ---------------------------------------------------------------------------
 
 class ItemOut(BaseModel):
     model_config = {"from_attributes": True}

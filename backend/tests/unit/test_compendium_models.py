@@ -56,6 +56,14 @@ class TestClassSkillsJunctionTable:
         assert "skills" in _relationship_names(ClassDefinition)
 
 
+class TestClassDefinitionSpellAbilityForeignKey:
+    def test_spell_ability_column_has_a_real_foreign_key(self):
+        column = ClassDefinition.__table__.c.spell_ability
+        assert len(column.foreign_keys) == 1
+        fk = next(iter(column.foreign_keys))
+        assert fk.target_fullname == "ability_score_options.name"
+
+
 class TestClassInitialEquipment:
     def test_has_expected_columns(self):
         columns = _column_names(ClassInitialEquipment)

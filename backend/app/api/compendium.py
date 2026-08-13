@@ -34,7 +34,7 @@ from app.schemas.compendium import (
     SpeciesCreate, SpeciesOut,
     SubclassCreate, SubclassOut,
 )
-from app.services.compendium import resolve_skills
+from app.services.compendium import ensure_ability_score_options, resolve_skills
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
 
@@ -101,6 +101,12 @@ async def get_class(class_id: uuid.UUID, db: DB):
 
 @router.post("/classes", response_model=ClassOut, status_code=201)
 async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
+    if data.spell_ability is not None:
+        # `spell_ability` is a FK to `ability_score_options.name`; ensure the
+        # lookup row exists *before* the initial flush below, since it may not
+        # yet be referenced by any primary/saving-throw ability or skill.
+        await ensure_ability_score_options(db, {data.spell_ability.value})
+
     obj = ClassDefinition(
         name=data.name,
         description=data.description,

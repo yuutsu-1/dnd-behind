@@ -138,7 +138,7 @@ class ClassDefinition(Base):
     hit_die: Mapped[int]            = mapped_column(Integer, nullable=False)
     skill_choices: Mapped[int]      = mapped_column(Integer, nullable=False, default=2)
     subclass_level: Mapped[int]     = mapped_column(Integer, nullable=False, default=3)
-    spell_ability: Mapped[str | None] = mapped_column(String(3), foreign_key="ability_score_options.name")
+    spell_ability: Mapped[str | None] = mapped_column(String(3), ForeignKey("ability_score_options.name"))
     spellcasting_type: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.compendium import create_class, create_skill, list_skills
-from app.db.models.compendium import SkillDefinition
+from app.db.models.compendium import ClassDefinition, SkillDefinition
 from app.enums import AbilityScore
 from app.schemas.compendium import ClassCreate, ClassInitialEquipmentCreate, SkillCreate
 from tests.integration.conftest import seed_item, seed_skill, seed_user
@@ -75,6 +75,41 @@ class TestClassSkillsM2M:
         rows = result.scalars().all()
         assert len(rows) == 2
         assert {r.ability_score for r in rows} == {"WIS", "INT"}
+
+
+class TestClassSpellAbilityForeignKey:
+    async def test_create_class_with_unreferenced_spell_ability_persists(self, db_session):
+        creator = await seed_user(db_session)
+        data = ClassCreate(
+            **_minimal_class_kwargs(
+                name="Sorcerer",
+                # CHA is not used by primary_ability/saving_throw_proficiencies/skills
+                # here, so no AbilityScoreOption("CHA") row exists yet when the
+                # ClassDefinition row is first flushed.
+                spell_ability=AbilityScore.CHA,
+            )
+        )
+
+        obj = await create_class(data, current_user=creator, db=db_session)
+
+        assert obj.spell_ability == "CHA"
+
+    async def test_direct_insert_with_invalid_spell_ability_is_rejected_by_db(self, db_session):
+        creator = await seed_user(db_session)
+        with pytest.raises(IntegrityError):
+            db_session.add(
+                ClassDefinition(
+                    id=uuid.uuid4(),
+                    name=f"Invalid-{uuid.uuid4().hex[:10]}",
+                    hit_die=8,
+                    skill_choices=2,
+                    subclass_level=3,
+                    spell_ability="ZZZ",
+                    is_homebrew=True,
+                    created_by=creator.id,
+                )
+            )
+            await db_session.flush()
 
 
 class TestSkillDefinitionUniqueConstraint:

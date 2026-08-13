@@ -93,13 +93,14 @@ def upgrade() -> None:
     sa.Column('hit_die', sa.Integer(), nullable=False),
     sa.Column('skill_choices', sa.Integer(), nullable=False),
     sa.Column('subclass_level', sa.Integer(), nullable=False),
-    sa.Column('spell_ability', sa.String(length=3), nullable=True, foreign_key='ability_score_options.name'),
+    sa.Column('spell_ability', sa.String(length=3), nullable=True),
     sa.Column('spellcasting_type', sa.String(length=10), nullable=True),
     sa.Column('source', sa.String(length=20), nullable=False),
     sa.Column('is_homebrew', sa.Boolean(), nullable=False),
     sa.Column('created_by', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['spell_ability'], ['ability_score_options.name'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )

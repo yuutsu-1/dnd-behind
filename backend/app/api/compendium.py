@@ -11,9 +11,11 @@ from app.db.models.compendium import (
     ArmorProficiencyOption,
     BackgroundDefinition,
     ClassDefinition,
+    ClassInitialEquipment,
     FeatDefinition,
     FeatureGrant,
     ItemDefinition,
+    SkillDefinition,
     SpellDefinition,
     SpeciesDefinition,
     SubclassDefinition,
@@ -27,10 +29,12 @@ from app.schemas.compendium import (
     FeatCreate, FeatOut,
     FeatureGrantCreate, FeatureGrantOut,
     ItemCreate, ItemOut,
+    SkillCreate, SkillOut,
     SpellCreate, SpellOut,
     SpeciesCreate, SpeciesOut,
     SubclassCreate, SubclassOut,
 )
+from app.services.compendium import resolve_skills
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
 
@@ -102,7 +106,6 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
         description=data.description,
         hit_die=data.hit_die,
         skill_choices=data.skill_choices,
-        skill_pool=data.skill_pool,
         subclass_level=data.subclass_level,
         spell_ability=data.spell_ability.value if data.spell_ability else None,
         spellcasting_type=data.spellcasting_type,
@@ -111,6 +114,15 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
     )
     db.add(obj)
     await db.flush()
+    # Explicitly (async-safely) load these relationships as empty collections
+    # before reassigning them below -- without this, SQLAlchemy would try to
+    # fetch their "old" value synchronously on first assignment (since the
+    # object became persistent at flush), which fails outside of an awaited
+    # call ("MissingGreenlet").
+    await db.refresh(obj, attribute_names=[
+        "primary_ability", "saving_throw_proficiencies", "armor_proficiencies",
+        "weapon_proficiencies", "tool_proficiencies", "skills",
+    ])
 
     obj.primary_ability = await _resolve_options(
         db, AbilityScoreOption, [a.value for a in data.primary_ability]
@@ -121,10 +133,40 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
     obj.armor_proficiencies = await _resolve_options(db, ArmorProficiencyOption, data.armor_proficiencies)
     obj.weapon_proficiencies = await _resolve_options(db, WeaponProficiencyOption, data.weapon_proficiencies)
     obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
+    obj.skills = await resolve_skills(db, data.skills)
+
+    for equipment in data.initial_equipment:
+        item_result = await db.execute(select(ItemDefinition).where(ItemDefinition.id == equipment.item_id))
+        if not item_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail=f"Item {equipment.item_id} not found")
+        db.add(ClassInitialEquipment(
+            class_id=obj.id,
+            item_id=equipment.item_id,
+            option=equipment.option,
+            quantity=equipment.quantity,
+        ))
 
     await db.commit()
     await db.refresh(obj)
     return obj
+
+
+@router.get("/skills", response_model=list[SkillOut])
+async def list_skills(db: DB, search: str | None = Query(default=None)):
+    q = select(SkillDefinition)
+    if search:
+        q = q.where(SkillDefinition.name.ilike(f"%{search}%"))
+    result = await db.execute(q)
+    return list(result.scalars().all())
+
+
+@router.post("/skills", response_model=SkillOut, status_code=201)
+async def create_skill(data: SkillCreate, current_user: CurrentUser, db: DB):
+    skills = await resolve_skills(db, [data])
+    await db.commit()
+    skill = skills[0]
+    await db.refresh(skill)
+    return skill
 
 
 @router.get("/subclasses", response_model=list[SubclassOut])

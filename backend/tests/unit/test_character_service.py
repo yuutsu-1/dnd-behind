@@ -17,6 +17,7 @@ from app.services.character import (
 from tests.conftest import (
     make_campaign_member,
     make_character,
+    make_character_ability_score,
     make_inventory_entry,
     make_result,
 )
@@ -96,7 +97,6 @@ class TestCreateCharacter:
             name="Aragorn",
             species_id=uuid.uuid4(),
             background_id=uuid.uuid4(),
-            class_id=uuid.uuid4(),
             ability_scores={"STR": 16, "DEX": 12, "CON": 14, "INT": 10, "WIS": 12, "CHA": 14},
             appearance={"hair": "dark"},
             notes="A ranger",
@@ -104,22 +104,23 @@ class TestCreateCharacter:
 
         character = await create_character(fake_db, data, user_id=user_id, campaign_id=campaign_id)
 
-        assert fake_db.add.call_count == 1
-        added = fake_db.add.call_args[0][0]
-        assert added is character
+        # `db.add` is also called once per missing `AbilityScoreOption` lookup
+        # row (get-or-create, via `ensure_ability_score_options`); the
+        # character itself must still be among the added objects.
+        added_objects = [call.args[0] for call in fake_db.add.call_args_list]
+        assert character in added_objects
         assert character.user_id == user_id
         assert character.campaign_id == campaign_id
         assert character.name == "Aragorn"
         assert character.species_id == data.species_id
         assert character.background_id == data.background_id
-        assert character.class_id == data.class_id
-        assert character.ability_scores == data.ability_scores
+        assert {row.ability_score: row.value for row in character.ability_scores} == data.ability_scores
         assert character.appearance == data.appearance
         assert character.notes == "A ranger"
         fake_db.commit.assert_awaited_once()
         fake_db.refresh.assert_awaited_once_with(
             character,
-            attribute_names=["owner", "campaign", "species", "background", "character_class", "subclass"],
+            attribute_names=["owner", "campaign", "species", "background", "classes", "ability_scores"],
         )
 
     async def test_campaign_id_optional_defaults_to_none(self, fake_db):
@@ -127,28 +128,66 @@ class TestCreateCharacter:
         character = await create_character(fake_db, data, user_id=uuid.uuid4())
         assert character.campaign_id is None
 
+    async def test_uses_default_ability_scores_when_not_provided(self, fake_db):
+        data = CharacterCreate(name="Solo Hero")
+        character = await create_character(fake_db, data, user_id=uuid.uuid4())
+
+        scores = {row.ability_score: row.value for row in character.ability_scores}
+        assert scores == {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+
 
 class TestUpdateCharacter:
     async def test_applies_only_non_none_fields(self, fake_db):
-        character = make_character(name="Old Name", level=1, notes="original notes")
-        update = CharacterUpdate(name="New Name", level=5)
+        character = make_character(name="Old Name", experience_points=0, notes="original notes")
+        update = CharacterUpdate(name="New Name", experience_points=100)
 
         result = await update_character(fake_db, character, update)
 
         assert result.name == "New Name"
-        assert result.level == 5
+        assert result.experience_points == 100
         assert result.notes == "original notes"
         fake_db.commit.assert_awaited_once()
         fake_db.refresh.assert_awaited_once_with(character)
 
     async def test_no_fields_set_leaves_character_unchanged(self, fake_db):
-        character = make_character(name="Unchanged", level=3)
+        character = make_character(name="Unchanged", experience_points=3)
         update = CharacterUpdate()
 
         result = await update_character(fake_db, character, update)
 
         assert result.name == "Unchanged"
-        assert result.level == 3
+        assert result.experience_points == 3
+
+    async def test_ability_scores_partial_update_upserts_only_provided_ability(self, fake_db):
+        character = make_character(
+            ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+        )
+        update = CharacterUpdate(ability_scores={"STR": 18})
+
+        result = await update_character(fake_db, character, update)
+
+        scores = {row.ability_score: row.value for row in result.ability_scores}
+        assert scores == {"STR": 18, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+
+    async def test_ability_scores_update_creates_missing_ability_row(self, fake_db):
+        character = make_character(
+            ability_scores=[make_character_ability_score(ability_score="STR", value=10)]
+        )
+        update = CharacterUpdate(ability_scores={"DEX": 14})
+
+        result = await update_character(fake_db, character, update)
+
+        scores = {row.ability_score: row.value for row in result.ability_scores}
+        assert scores == {"STR": 10, "DEX": 14}
+
+    async def test_ability_scores_omitted_from_payload_leaves_existing_untouched(self, fake_db):
+        character = make_character(ability_scores={"STR": 16})
+        update = CharacterUpdate(name="Renamed")
+
+        result = await update_character(fake_db, character, update)
+
+        scores = {row.ability_score: row.value for row in result.ability_scores}
+        assert scores == {"STR": 16}
 
 
 class TestApplyHPUpdate:

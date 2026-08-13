@@ -2,15 +2,19 @@ import uuid
 
 from app.schemas.campaign import CampaignOut, MemberOut
 from app.schemas.character import CharacterOut, InventoryItemOut
-from app.schemas.compendium import SubclassOut
+from app.schemas.compendium import ClassOut, SubclassOut
 from tests.conftest import (
     make_background,
     make_campaign,
     make_campaign_member,
     make_character,
+    make_character_ability_score,
+    make_character_class,
     make_class,
+    make_class_initial_equipment,
     make_inventory_entry,
     make_item,
+    make_skill,
     make_species,
     make_subclass,
     make_user,
@@ -108,58 +112,39 @@ class TestCharacterOutBackgroundName:
         assert out.background_name is None
 
 
-class TestCharacterOutClassName:
-    def test_populated_when_class_loaded(self):
-        klass = make_class(name="Wizard")
-        character = make_character(class_id=klass.id, character_class=klass)
+class TestCharacterOutClasses:
+    def test_no_classes_yields_empty_list_and_zero_total_level(self):
+        character = make_character(classes=[])
 
         out = CharacterOut.model_validate(character, from_attributes=True)
 
-        assert out.class_name == "Wizard"
+        assert out.classes == []
+        assert out.total_level == 0
 
-    def test_none_when_class_id_none(self):
-        character = make_character(class_id=None, character_class=None)
-
-        out = CharacterOut.model_validate(character, from_attributes=True)
-
-        assert out.class_id is None
-        assert out.class_name is None
-
-    def test_none_when_class_id_set_but_relationship_none(self):
-        orphan_id = uuid.uuid4()
-        character = make_character(class_id=orphan_id, character_class=None)
-
-        out = CharacterOut.model_validate(character, from_attributes=True)
-
-        assert out.class_id == orphan_id
-        assert out.class_name is None
-
-
-class TestCharacterOutSubclassName:
-    def test_populated_when_subclass_loaded(self):
-        subclass = make_subclass(name="Evocation")
-        character = make_character(subclass_id=subclass.id, subclass=subclass)
+    def test_multiclass_entries_expose_names_and_hit_dice_pool_per_class(self):
+        wizard = make_class(name="Wizard", hit_die=6)
+        fighter = make_class(name="Fighter", hit_die=10)
+        evocation = make_subclass(name="Evocation", class_id=wizard.id)
+        entry_wizard = make_character_class(
+            class_id=wizard.id, class_=wizard, level=3,
+            subclass_id=evocation.id, subclass=evocation, hit_dice_used=1,
+        )
+        entry_fighter = make_character_class(class_id=fighter.id, class_=fighter, level=2, hit_dice_used=0)
+        character = make_character(classes=[entry_wizard, entry_fighter])
 
         out = CharacterOut.model_validate(character, from_attributes=True)
 
-        assert out.subclass_name == "Evocation"
-
-    def test_none_when_subclass_id_none(self):
-        character = make_character(subclass_id=None, subclass=None)
-
-        out = CharacterOut.model_validate(character, from_attributes=True)
-
-        assert out.subclass_id is None
-        assert out.subclass_name is None
-
-    def test_none_when_subclass_id_set_but_relationship_none(self):
-        orphan_id = uuid.uuid4()
-        character = make_character(subclass_id=orphan_id, subclass=None)
-
-        out = CharacterOut.model_validate(character, from_attributes=True)
-
-        assert out.subclass_id == orphan_id
-        assert out.subclass_name is None
+        assert out.total_level == 5
+        by_name = {c.class_name: c for c in out.classes}
+        assert by_name["Wizard"].level == 3
+        assert by_name["Wizard"].subclass_name == "Evocation"
+        assert by_name["Wizard"].hit_die == 6
+        assert by_name["Wizard"].hit_dice_total == 3
+        assert by_name["Wizard"].hit_dice_used == 1
+        assert by_name["Wizard"].hit_dice_remaining == 2
+        assert by_name["Fighter"].subclass_name is None
+        assert by_name["Fighter"].hit_die == 10
+        assert by_name["Fighter"].hit_dice_remaining == 2
 
 
 class TestInventoryItemOutItemName:
@@ -221,6 +206,46 @@ class TestMemberOutNames:
 
         assert out.user_name == "player1"
         assert out.campaign_name == "Tomb of Annihilation"
+
+
+class TestCharacterOutAbilityScores:
+    def test_serializes_list_of_rows_as_name_to_value_dict(self):
+        character = make_character(
+            ability_scores=[
+                make_character_ability_score(ability_score="STR", value=16),
+                make_character_ability_score(ability_score="DEX", value=12),
+            ]
+        )
+
+        out = CharacterOut.model_validate(character, from_attributes=True)
+
+        assert out.ability_scores == {"STR": 16, "DEX": 12}
+
+    def test_empty_list_serializes_as_empty_dict(self):
+        character = make_character(ability_scores=[])
+
+        out = CharacterOut.model_validate(character, from_attributes=True)
+
+        assert out.ability_scores == {}
+
+
+class TestClassOutSkillsAndInitialEquipment:
+    def test_no_longer_has_skill_pool_field(self):
+        assert "skill_pool" not in ClassOut.model_fields
+
+    def test_skills_and_initial_equipment_populated_from_relationships(self):
+        athletics = make_skill(name="Athletics", ability_score="STR")
+        arcana = make_skill(name="Arcana", ability_score="INT")
+        item = make_item(name="Dagger")
+        equipment_entry = make_class_initial_equipment(item=item, option="A", quantity=2)
+        klass = make_class(name="Wizard", skills=[athletics, arcana], initial_equipment=[equipment_entry])
+
+        out = ClassOut.model_validate(klass, from_attributes=True)
+
+        assert {s.name for s in out.skills} == {"Athletics", "Arcana"}
+        assert out.initial_equipment[0].item_name == "Dagger"
+        assert out.initial_equipment[0].option == "A"
+        assert out.initial_equipment[0].quantity == 2
 
 
 class TestSubclassOutClassName:

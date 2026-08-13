@@ -9,15 +9,23 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 
 import pytest  # noqa: E402
-from sqlalchemy import event  # noqa: E402
+from sqlalchemy import event, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.db.models.campaign import Campaign, CampaignMember  # noqa: E402
-from app.db.models.character import Character, CharacterInventory  # noqa: E402
+from app.db.models.character import (  # noqa: E402
+    Character,
+    CharacterAbilityScore,
+    CharacterClass,
+    CharacterInventory,
+)
 from app.db.models.compendium import (  # noqa: E402
+    AbilityScoreOption,
     BackgroundDefinition,
     ClassDefinition,
+    ClassInitialEquipment,
     ItemDefinition,
+    SkillDefinition,
     SpeciesDefinition,
     SubclassDefinition,
 )
@@ -142,7 +150,6 @@ async def seed_class(session: AsyncSession, **overrides) -> ClassDefinition:
         description=None,
         hit_die=10,
         skill_choices=2,
-        skill_pool=[],
         subclass_level=3,
         spell_ability=None,
         spellcasting_type=None,
@@ -232,18 +239,17 @@ async def seed_character(session: AsyncSession, owner: User, **overrides) -> Cha
         user_id=owner.id,
         campaign_id=None,
         name="Test Character",
-        level=1,
         experience_points=0,
         species_id=None,
         background_id=None,
-        class_id=None,
-        subclass_id=None,
+        # Accepts either a dict (`{"STR": 10, ...}`, converted below into
+        # `character_ability_scores` rows -- keeps the public factory interface
+        # unchanged) or an explicit list of `CharacterAbilityScore` instances.
         ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
         current_hp=10,
         max_hp=10,
         temp_hp=0,
         death_saves={"successes": 0, "failures": 0},
-        hit_dice_remaining={},
         conditions=[],
         exhaustion_level=0,
         inspiration=False,
@@ -255,7 +261,109 @@ async def seed_character(session: AsyncSession, owner: User, **overrides) -> Cha
         is_active=True,
     )
     defaults.update(overrides)
+
+    ability_scores = defaults.pop("ability_scores")
+    character_id = defaults["id"]
+
     obj = Character(**defaults)
+    session.add(obj)
+
+    if isinstance(ability_scores, dict):
+        await _ensure_ability_score_options(session, ability_scores.keys())
+        for name, value in ability_scores.items():
+            session.add(CharacterAbilityScore(character_id=character_id, ability_score=name, value=value))
+    else:
+        for row in ability_scores:
+            row.character_id = character_id
+            await _ensure_ability_score_options(session, [row.ability_score])
+            session.add(row)
+
+    await session.flush()
+    return obj
+
+
+async def seed_character_class(
+    session: AsyncSession, character: Character, class_def: ClassDefinition, **overrides
+) -> CharacterClass:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=character.id,
+        class_id=class_def.id,
+        level=1,
+        subclass_id=None,
+        hit_dice_used=0,
+    )
+    defaults.update(overrides)
+    obj = CharacterClass(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def seed_character_ability_score(
+    session: AsyncSession, character: Character, **overrides
+) -> CharacterAbilityScore:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=character.id,
+        ability_score="STR",
+        value=10,
+    )
+    defaults.update(overrides)
+    await _ensure_ability_score_options(session, [defaults["ability_score"]])
+    obj = CharacterAbilityScore(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def _ensure_ability_score_options(session: AsyncSession, names) -> None:
+    """Get-or-create `AbilityScoreOption` rows so FKs to `ability_score_options.name`
+    (used by `SkillDefinition.ability_score` and `CharacterAbilityScore.ability_score`)
+    can be safely inserted, even if no class has referenced that ability yet."""
+    names = list(names)
+    if not names:
+        return
+    existing = await session.execute(select(AbilityScoreOption).where(AbilityScoreOption.name.in_(names)))
+    existing_names = {row.name for row in existing.scalars().all()}
+    missing = set(names) - existing_names
+    for name in missing:
+        session.add(AbilityScoreOption(name=name))
+    if missing:
+        await session.flush()
+
+
+async def seed_skill(session: AsyncSession, **overrides) -> SkillDefinition:
+    defaults = dict(
+        id=uuid.uuid4(),
+        name=f"Skill-{uuid.uuid4().hex[:10]}",
+        ability_score="STR",
+    )
+    defaults.update(overrides)
+
+    # `ability_score` is a FK to `ability_score_options.name`; ensure the
+    # lookup row exists (it is otherwise only lazily created when a class
+    # references it as a primary/saving-throw ability).
+    await _ensure_ability_score_options(session, [defaults["ability_score"]])
+
+    obj = SkillDefinition(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def seed_class_initial_equipment(
+    session: AsyncSession, class_def: ClassDefinition, item: ItemDefinition, **overrides
+) -> ClassInitialEquipment:
+    defaults = dict(
+        id=uuid.uuid4(),
+        class_id=class_def.id,
+        item_id=item.id,
+        option="A",
+        quantity=1,
+    )
+    defaults.update(overrides)
+    obj = ClassInitialEquipment(**defaults)
     session.add(obj)
     await session.flush()
     return obj

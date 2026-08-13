@@ -10,11 +10,18 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 import pytest  # noqa: E402
 
 from app.db.models.campaign import Campaign, CampaignMember  # noqa: E402
-from app.db.models.character import Character, CharacterInventory  # noqa: E402
+from app.db.models.character import (  # noqa: E402
+    Character,
+    CharacterAbilityScore,
+    CharacterClass,
+    CharacterInventory,
+)
 from app.db.models.compendium import (  # noqa: E402
     BackgroundDefinition,
     ClassDefinition,
+    ClassInitialEquipment,
     ItemDefinition,
+    SkillDefinition,
     SpeciesDefinition,
     SubclassDefinition,
 )
@@ -113,24 +120,35 @@ def make_campaign_member(**overrides) -> CampaignMember:
     return CampaignMember(**defaults)
 
 
+def make_character_ability_score(**overrides) -> CharacterAbilityScore:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=uuid.uuid4(),
+        ability_score="STR",
+        value=10,
+    )
+    defaults.update(overrides)
+    return CharacterAbilityScore(**defaults)
+
+
 def make_character(**overrides) -> Character:
     defaults = dict(
         id=uuid.uuid4(),
         user_id=uuid.uuid4(),
         campaign_id=None,
         name="Test Character",
-        level=1,
         experience_points=0,
         species_id=None,
         background_id=None,
-        class_id=None,
-        subclass_id=None,
+        # Accepts either a dict (`{"STR": 10, ...}`, converted below into
+        # `CharacterAbilityScore` rows -- keeps the public factory interface
+        # unchanged) or an explicit list of `CharacterAbilityScore` for tests
+        # that need fine-grained control (e.g. `ability_scores=[]`).
         ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
         current_hp=10,
         max_hp=10,
         temp_hp=0,
         death_saves={"successes": 0, "failures": 0},
-        hit_dice_remaining={},
         conditions=[],
         exhaustion_level=0,
         inspiration=False,
@@ -146,9 +164,33 @@ def make_character(**overrides) -> Character:
         # validates out of the box; override explicitly in tests that care
         # about this relationship specifically.
         owner=make_user(),
+        classes=[],
     )
     defaults.update(overrides)
-    return Character(**defaults)
+
+    ability_scores = defaults.pop("ability_scores")
+    if isinstance(ability_scores, dict):
+        ability_scores = [
+            make_character_ability_score(ability_score=name, value=value)
+            for name, value in ability_scores.items()
+        ]
+
+    return Character(ability_scores=ability_scores, **defaults)
+
+
+def make_character_class(**overrides) -> CharacterClass:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=uuid.uuid4(),
+        class_id=uuid.uuid4(),
+        level=1,
+        subclass_id=None,
+        hit_dice_used=0,
+        class_=make_class(),
+        subclass=None,
+    )
+    defaults.update(overrides)
+    return CharacterClass(**defaults)
 
 
 def make_species(**overrides) -> SpeciesDefinition:
@@ -190,7 +232,6 @@ def make_class(**overrides) -> ClassDefinition:
         description=None,
         hit_die=10,
         skill_choices=2,
-        skill_pool=[],
         subclass_level=3,
         spell_ability=None,
         spellcasting_type=None,
@@ -238,6 +279,29 @@ def make_item(**overrides) -> ItemDefinition:
     )
     defaults.update(overrides)
     return ItemDefinition(**defaults)
+
+
+def make_skill(**overrides) -> SkillDefinition:
+    defaults = dict(
+        id=uuid.uuid4(),
+        name="Athletics",
+        ability_score="STR",
+    )
+    defaults.update(overrides)
+    return SkillDefinition(**defaults)
+
+
+def make_class_initial_equipment(**overrides) -> ClassInitialEquipment:
+    defaults = dict(
+        id=uuid.uuid4(),
+        class_id=uuid.uuid4(),
+        item_id=uuid.uuid4(),
+        option="A",
+        quantity=1,
+        item=make_item(),
+    )
+    defaults.update(overrides)
+    return ClassInitialEquipment(**defaults)
 
 
 def make_inventory_entry(**overrides) -> CharacterInventory:

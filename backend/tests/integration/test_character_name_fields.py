@@ -15,6 +15,7 @@ from tests.integration.conftest import (
     seed_background,
     seed_campaign,
     seed_character,
+    seed_character_class,
     seed_class,
     seed_item,
     seed_species,
@@ -29,7 +30,7 @@ class TestCharacterOutNameFieldsPopulated:
         campaign = await seed_campaign(db_session, creator=owner, name="Fellowship")
         species = await seed_species(db_session, name="Human")
         background = await seed_background(db_session, name="Ranger")
-        klass = await seed_class(db_session, name="Ranger Class")
+        klass = await seed_class(db_session, name="Ranger Class", subclass_level=1)
         subclass = await seed_subclass(db_session, klass, name="Hunter")
         character = await seed_character(
             db_session,
@@ -37,9 +38,8 @@ class TestCharacterOutNameFieldsPopulated:
             campaign_id=campaign.id,
             species_id=species.id,
             background_id=background.id,
-            class_id=klass.id,
-            subclass_id=subclass.id,
         )
+        await seed_character_class(db_session, character, klass, level=3, subclass_id=subclass.id)
 
         fetched = await get_character_or_404(db_session, character.id)
         out = CharacterOut.model_validate(fetched, from_attributes=True)
@@ -48,8 +48,10 @@ class TestCharacterOutNameFieldsPopulated:
         assert out.campaign_name == "Fellowship"
         assert out.species_name == "Human"
         assert out.background_name == "Ranger"
-        assert out.class_name == "Ranger Class"
-        assert out.subclass_name == "Hunter"
+        assert out.total_level == 3
+        assert len(out.classes) == 1
+        assert out.classes[0].class_name == "Ranger Class"
+        assert out.classes[0].subclass_name == "Hunter"
 
     async def test_nullable_reference_names_are_none_with_real_null_ids(self, db_session):
         owner = await seed_user(db_session)
@@ -59,8 +61,6 @@ class TestCharacterOutNameFieldsPopulated:
             campaign_id=None,
             species_id=None,
             background_id=None,
-            class_id=None,
-            subclass_id=None,
         )
 
         fetched = await get_character_or_404(db_session, character.id)
@@ -69,8 +69,8 @@ class TestCharacterOutNameFieldsPopulated:
         assert out.campaign_id is None and out.campaign_name is None
         assert out.species_id is None and out.species_name is None
         assert out.background_id is None and out.background_name is None
-        assert out.class_id is None and out.class_name is None
-        assert out.subclass_id is None and out.subclass_name is None
+        assert out.classes == []
+        assert out.total_level == 0
         assert out.user_name == owner.username
 
 

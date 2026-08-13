@@ -17,10 +17,6 @@ build/
 venv/
 env/
 
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/.gitkeep
-
 # Node
 node_modules/
 .next/

@@ -2,8 +2,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum as SAEnum, Float,
-    ForeignKey, Integer, String, Table, Text, func,
+    Boolean, CheckConstraint, Column, DateTime, Enum as SAEnum, Float,
+    ForeignKey, Integer, String, Table, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,7 +33,14 @@ class ToolProficiencyOption(Base):
     name: Mapped[str] = mapped_column(String(60), primary_key=True)
 
 
-# ---------------------------------------------------------------------------
+class SkillDefinition(Base):
+    __tablename__ = "skill_definitions"
+    __table_args__ = (UniqueConstraint("name", "ability_score"),)
+
+    id: Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str]           = mapped_column(String(100), nullable=False)
+    ability_score: Mapped[str]  = mapped_column(String(3), ForeignKey("ability_score_options.name"), nullable=False)
+
 
 
 class_primary_abilities = Table(
@@ -76,6 +83,13 @@ spell_class_lists = Table(
     Base.metadata,
     Column("spell_id", UUID(as_uuid=True), ForeignKey("spell_definitions.id", ondelete="CASCADE"), primary_key=True),
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
+)
+
+class_skills = Table(
+    "class_skills",
+    Base.metadata,
+    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
+    Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
 )
 
 
@@ -123,7 +137,6 @@ class ClassDefinition(Base):
     description: Mapped[str | None] = mapped_column(Text)
     hit_die: Mapped[int]            = mapped_column(Integer, nullable=False)
     skill_choices: Mapped[int]      = mapped_column(Integer, nullable=False, default=2)
-    skill_pool: Mapped[list]        = mapped_column(JSONB, nullable=False, default=list)
     subclass_level: Mapped[int]     = mapped_column(Integer, nullable=False, default=3)
     spell_ability: Mapped[str | None] = mapped_column(String(3), foreign_key="ability_score_options.name")
     spellcasting_type: Mapped[str | None] = mapped_column(String(10))
@@ -147,7 +160,13 @@ class ClassDefinition(Base):
     tool_proficiencies: Mapped[list[ToolProficiencyOption]] = relationship(
         secondary=class_tool_proficiencies, lazy="selectin"
     )
+    skills: Mapped[list[SkillDefinition]] = relationship(
+        secondary=class_skills, lazy="selectin"
+    )
     subclasses: Mapped[list["SubclassDefinition"]] = relationship(back_populates="class_def")
+    initial_equipment: Mapped[list["ClassInitialEquipment"]] = relationship(
+        back_populates="class_def", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class SubclassDefinition(Base):
@@ -242,3 +261,21 @@ class ItemDefinition(Base):
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClassInitialEquipment(Base):
+    __tablename__ = "class_initial_equipment"
+    __table_args__ = (CheckConstraint("quantity >= 1", name="ck_class_initial_equipment_quantity_positive"),)
+
+    id: Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    class_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), nullable=False)
+    item_id: Mapped[uuid.UUID]  = mapped_column(UUID(as_uuid=True), ForeignKey("item_definitions.id"), nullable=False)
+    option: Mapped[str]         = mapped_column(String(10), nullable=False)
+    quantity: Mapped[int]       = mapped_column(Integer, nullable=False, default=1)
+
+    class_def: Mapped["ClassDefinition"] = relationship(back_populates="initial_equipment")
+    item: Mapped["ItemDefinition"]       = relationship()
+
+    @property
+    def item_name(self) -> str | None:
+        return self.item.name if self.item else None

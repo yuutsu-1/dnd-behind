@@ -58,6 +58,36 @@ def _pluck(v: list) -> list: #pra casos das lookup tables, deixa a vida mais fá
     return v
 
 
+class SkillOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    name: str
+    ability_score: str
+
+
+class SkillCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    ability_score: AbilityScore
+
+
+class ClassInitialEquipmentOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    class_id: uuid.UUID
+    item_id: uuid.UUID
+    item_name: str
+    option: str
+    quantity: int
+
+
+class ClassInitialEquipmentCreate(BaseModel):
+    item_id: uuid.UUID
+    option: str = Field(min_length=1, max_length=10)
+    quantity: int = Field(default=1, ge=1)
+
+
 class ClassOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -71,7 +101,8 @@ class ClassOut(BaseModel):
     weapon_proficiencies: list[str]
     tool_proficiencies: list[str]
     skill_choices: int
-    skill_pool: list
+    skills: list[SkillOut]
+    initial_equipment: list[ClassInitialEquipmentOut]
     subclass_level: int
     spell_ability: str | None
     spellcasting_type: str | None
@@ -99,7 +130,8 @@ class ClassCreate(BaseModel):
     weapon_proficiencies: list[str] = Field(default_factory=list)
     tool_proficiencies: list[str] = Field(default_factory=list)
     skill_choices: int = 2
-    skill_pool: list[str] = Field(default_factory=list)
+    skills: list[SkillCreate] = Field(default_factory=list)
+    initial_equipment: list[ClassInitialEquipmentCreate] = Field(default_factory=list)
     subclass_level: int = 3
     spell_ability: AbilityScore | None = None
     spellcasting_type: str | None = None

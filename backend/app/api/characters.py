@@ -6,13 +6,17 @@ from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.campaign import CampaignMember
-from app.db.models.character import Character, CharacterInventory
+from app.db.models.character import Character, CharacterClass, CharacterInventory
 from app.schemas.character import (
     AddItemRequest,
+    CharacterClassCreate,
+    CharacterClassOut,
+    CharacterClassUpdate,
     CharacterCreate,
     CharacterOut,
     CharacterUpdate,
     CharacterWithInventory,
+    HitDiceUsedUpdate,
     HPUpdate,
     InventoryItemOut,
     UpdateInventoryItem,
@@ -55,8 +59,8 @@ async def my_characters(current_user: CurrentUser, db: DB):
             selectinload(Character.campaign),
             selectinload(Character.species),
             selectinload(Character.background),
-            selectinload(Character.character_class),
-            selectinload(Character.subclass),
+            selectinload(Character.classes).selectinload(CharacterClass.class_),
+            selectinload(Character.classes).selectinload(CharacterClass.subclass),
         )
     )
     return list(result.scalars().all())
@@ -186,6 +190,75 @@ async def remove_item(character_id: uuid.UUID, inventory_id: uuid.UUID, current_
         {"inventory_id": str(inventory_id)},
         current_user.id,
     )
+
+
+@router.post("/{character_id}/classes", response_model=CharacterClassOut, status_code=201)
+async def add_character_class(character_id: uuid.UUID, data: CharacterClassCreate, current_user: CurrentUser, db: DB):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    entry = await char_service.add_character_class(db, character, data)
+
+    await _broadcast(
+        character.campaign_id, "character.class.add", character.id,
+        {"class_id": str(data.class_id), "level": data.level},
+        current_user.id,
+    )
+    return entry
+
+
+@router.patch("/{character_id}/classes/{class_entry_id}", response_model=CharacterClassOut)
+async def update_character_class(
+    character_id: uuid.UUID,
+    class_entry_id: uuid.UUID,
+    data: CharacterClassUpdate,
+    current_user: CurrentUser,
+    db: DB,
+):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    entry = await char_service.update_character_class(db, character, class_entry_id, data)
+
+    await _broadcast(
+        character.campaign_id, "character.class.update", character.id,
+        data.model_dump(exclude_unset=True, mode="json"), current_user.id,
+    )
+    return entry
+
+
+@router.delete("/{character_id}/classes/{class_entry_id}", status_code=204)
+async def remove_character_class(character_id: uuid.UUID, class_entry_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    await char_service.remove_character_class(db, character, class_entry_id)
+
+    await _broadcast(
+        character.campaign_id, "character.class.remove", character.id,
+        {"class_entry_id": str(class_entry_id)}, current_user.id,
+    )
+
+
+@router.patch("/{character_id}/classes/{class_entry_id}/hit-dice", response_model=CharacterClassOut)
+async def update_character_class_hit_dice(
+    character_id: uuid.UUID,
+    class_entry_id: uuid.UUID,
+    data: HitDiceUsedUpdate,
+    current_user: CurrentUser,
+    db: DB,
+):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    entry = await char_service.update_hit_dice_used(db, character, class_entry_id, data)
+
+    await _broadcast(
+        character.campaign_id, "character.class.hit_dice", character.id,
+        {"class_entry_id": str(class_entry_id), "hit_dice_used": data.hit_dice_used},
+        current_user.id,
+    )
+    return entry
 
 
 @router.get("/campaign/{campaign_id}", response_model=list[CharacterWithInventory])

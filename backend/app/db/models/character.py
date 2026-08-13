@@ -1,13 +1,11 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-
-_ABILITY_SCORES_DEFAULT = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
 
 
 class Character(Base):
@@ -18,22 +16,15 @@ class Character(Base):
     campaign_id: Mapped[uuid.UUID | None]   = mapped_column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=True)
   
     name: Mapped[str]                       = mapped_column(String(100), nullable=False)
-    level: Mapped[int]                      = mapped_column(Integer, nullable=False, default=1)
     experience_points: Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
   
     species_id: Mapped[uuid.UUID | None]    = mapped_column(UUID(as_uuid=True), ForeignKey("species_definitions.id"), nullable=True)
     background_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("background_definitions.id"), nullable=True)
-    class_id: Mapped[uuid.UUID | None]      = mapped_column(UUID(as_uuid=True), ForeignKey("class_definitions.id"), nullable=True)
-    subclass_id: Mapped[uuid.UUID | None]   = mapped_column(UUID(as_uuid=True), ForeignKey("subclass_definitions.id"), nullable=True)
-  
-    ability_scores: Mapped[dict]            = mapped_column(JSONB, nullable=False, default=lambda: dict(_ABILITY_SCORES_DEFAULT))
-  
+
     current_hp: Mapped[int]                 = mapped_column(Integer, nullable=False, default=0)
     max_hp: Mapped[int]                     = mapped_column(Integer, nullable=False, default=0)
     temp_hp: Mapped[int]                    = mapped_column(Integer, nullable=False, default=0)
     death_saves: Mapped[dict]               = mapped_column(JSONB, nullable=False, default=lambda: {"successes": 0, "failures": 0})
-
-    hit_dice_remaining: Mapped[dict]        = mapped_column(JSONB, nullable=False, default=dict) #TODO: Ao invés de dict, mapear usos. Hit die vai ficar amarrado na classe
 
     conditions: Mapped[list]                = mapped_column(JSONB, nullable=False, default=list)
     exhaustion_level: Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
@@ -53,8 +44,8 @@ class Character(Base):
     campaign: Mapped["Campaign"]            = relationship(back_populates="characters")  # noqa: F821
     species: Mapped["SpeciesDefinition"]    = relationship(foreign_keys=[species_id])  # noqa: F821
     background: Mapped["BackgroundDefinition"] = relationship(foreign_keys=[background_id])  # noqa: F821
-    character_class: Mapped["ClassDefinition"] = relationship(foreign_keys=[class_id])  # noqa: F821
-    subclass: Mapped["SubclassDefinition"]  = relationship(foreign_keys=[subclass_id])  # noqa: F821
+    classes: Mapped[list["CharacterClass"]] = relationship(back_populates="character", cascade="all, delete-orphan", lazy="selectin")
+    ability_scores: Mapped[list["CharacterAbilityScore"]] = relationship(back_populates="character", cascade="all, delete-orphan", lazy="selectin")
     inventory: Mapped[list["CharacterInventory"]] = relationship(back_populates="character", cascade="all, delete-orphan")
     feats: Mapped[list["CharacterFeat"]]    = relationship(back_populates="character", cascade="all, delete-orphan")
     spells: Mapped[list["CharacterSpell"]]  = relationship(back_populates="character", cascade="all, delete-orphan")
@@ -77,12 +68,64 @@ class Character(Base):
         return self.background.name if self.background else None
 
     @property
+    def total_level(self) -> int:
+        return sum(entry.level for entry in self.classes) if self.classes else 0
+
+
+class CharacterClass(Base):
+    """One entry per class a character has levels in (supports multiclassing)."""
+    __tablename__ = "character_classes"
+    __table_args__ = (UniqueConstraint("character_id", "class_id"),)
+
+    id: Mapped[uuid.UUID]                 = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    character_id: Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"))
+    class_id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), ForeignKey("class_definitions.id"), nullable=False)
+    level: Mapped[int]                    = mapped_column(Integer, nullable=False, default=1)
+    subclass_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("subclass_definitions.id"), nullable=True)
+    hit_dice_used: Mapped[int]            = mapped_column(Integer, nullable=False, default=0)
+
+    character: Mapped["Character"]          = relationship(back_populates="classes")
+    class_: Mapped["ClassDefinition"]       = relationship(foreign_keys=[class_id], lazy="selectin")  # noqa: F821
+    subclass: Mapped["SubclassDefinition | None"] = relationship(foreign_keys=[subclass_id], lazy="selectin")  # noqa: F821
+
+    @property
     def class_name(self) -> str | None:
-        return self.character_class.name if self.character_class else None
+        return self.class_.name if self.class_ else None
 
     @property
     def subclass_name(self) -> str | None:
         return self.subclass.name if self.subclass else None
+
+    @property
+    def hit_die(self) -> int | None:
+        return self.class_.hit_die if self.class_ else None
+
+    @property
+    def hit_dice_total(self) -> int:
+        return self.level
+
+    @property
+    def hit_dice_remaining(self) -> int:
+        return self.level - self.hit_dice_used
+
+
+class CharacterAbilityScore(Base):
+    """One row per ability score a character has a value for (STR/DEX/CON/INT/WIS/CHA)."""
+    __tablename__ = "character_ability_scores"
+    __table_args__ = (
+        UniqueConstraint("character_id", "ability_score"),
+        # D&D 5e/5.5 ability score bounds: 1 is the practical floor (0 has special
+        # rules engine-side and isn't a normal assignable value), 30 is the usual
+        # hard cap (e.g. Wish/epic boons). Assumption documented for QA/review.
+        CheckConstraint("value >= 1 AND value <= 30", name="ck_character_ability_scores_value_bounds"),
+    )
+
+    id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"))
+    ability_score: Mapped[str]      = mapped_column(String(3), ForeignKey("ability_score_options.name"), nullable=False)
+    value: Mapped[int]              = mapped_column(Integer, nullable=False, default=10)
+
+    character: Mapped["Character"] = relationship(back_populates="ability_scores")
 
 
 class CharacterInventory(Base):

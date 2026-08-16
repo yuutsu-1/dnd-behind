@@ -22,12 +22,15 @@ from app.db.models.character import (  # noqa: E402
 from app.db.models.compendium import (  # noqa: E402
     AbilityScoreOption,
     BackgroundDefinition,
+    BackgroundInitialEquipment,
     ClassDefinition,
     ClassInitialEquipment,
+    FeatDefinition,
     ItemDefinition,
     SkillDefinition,
     SpeciesDefinition,
     SubclassDefinition,
+    ToolProficiencyOption,
 )
 from app.db.models.user import User  # noqa: E402
 from app.enums import CreatureSize  # noqa: E402
@@ -128,16 +131,75 @@ async def seed_species(session: AsyncSession, **overrides) -> SpeciesDefinition:
     return obj
 
 
+async def seed_feat(session: AsyncSession, **overrides) -> FeatDefinition:
+    defaults = dict(
+        id=uuid.uuid4(),
+        name=f"Feat-{uuid.uuid4().hex[:10]}",
+        description=None,
+        category="origin",
+        level_prerequisite=0,
+        prerequisite_description=None,
+        repeatable=False,
+        source="srd",
+        is_homebrew=False,
+    )
+    defaults.update(overrides)
+    obj = FeatDefinition(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def _ensure_tool_proficiency_option(session: AsyncSession, name: str) -> None:
+    """Get-or-create a `ToolProficiencyOption` row so FKs to
+    `tool_proficiency_options.name` (used by `BackgroundDefinition.tool_proficiency`)
+    can be safely inserted."""
+    existing = await session.execute(select(ToolProficiencyOption).where(ToolProficiencyOption.name == name))
+    if existing.scalar_one_or_none() is None:
+        session.add(ToolProficiencyOption(name=name))
+        await session.flush()
+
+
 async def seed_background(session: AsyncSession, **overrides) -> BackgroundDefinition:
     defaults = dict(
         id=uuid.uuid4(),
         name=f"Background-{uuid.uuid4().hex[:10]}",
         description=None,
+        feat_id=None,
+        tool_proficiency=None,
         source="srd",
         is_homebrew=False,
     )
     defaults.update(overrides)
+
+    # `feat_id`/`tool_proficiency` are NOT NULL FKs; get-or-create minimal
+    # rows for them when the caller doesn't provide one, so `seed_background`
+    # keeps working as a "just give me a background" factory.
+    if defaults["feat_id"] is None:
+        feat = await seed_feat(session)
+        defaults["feat_id"] = feat.id
+    if defaults["tool_proficiency"] is None:
+        defaults["tool_proficiency"] = f"Tool-{uuid.uuid4().hex[:10]}"
+    await _ensure_tool_proficiency_option(session, defaults["tool_proficiency"])
+
     obj = BackgroundDefinition(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def seed_background_initial_equipment(
+    session: AsyncSession, background: BackgroundDefinition, item: ItemDefinition, **overrides
+) -> BackgroundInitialEquipment:
+    defaults = dict(
+        id=uuid.uuid4(),
+        background_id=background.id,
+        item_id=item.id,
+        option="A",
+        quantity=1,
+    )
+    defaults.update(overrides)
+    obj = BackgroundInitialEquipment(**defaults)
     session.add(obj)
     await session.flush()
     return obj

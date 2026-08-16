@@ -10,6 +10,7 @@ from app.db.models.compendium import (
     AbilityScoreOption,
     ArmorProficiencyOption,
     BackgroundDefinition,
+    BackgroundInitialEquipment,
     ClassDefinition,
     ClassInitialEquipment,
     FeatDefinition,
@@ -24,7 +25,7 @@ from app.db.models.compendium import (
     spell_class_lists,
 )
 from app.schemas.compendium import (
-    BackgroundCreate, BackgroundOut,
+    BackgroundCreate, BackgroundOut, BackgroundUpdate,
     ClassCreate, ClassOut,
     FeatCreate, FeatOut,
     FeatureGrantCreate, FeatureGrantOut,
@@ -53,7 +54,6 @@ async def _resolve_options(db: AsyncSession, model, names: list[str]) -> list:
             await db.flush()
             output.append(new_obj)
     return output
-
 
 @router.get("/species", response_model=list[SpeciesOut])
 async def list_species(db: DB, search: str | None = Query(default=None)):
@@ -202,10 +202,109 @@ async def list_backgrounds(db: DB, search: str | None = Query(default=None)):
     return list(result.scalars().all())
 
 
+@router.get("/backgrounds/{background_id}", response_model=BackgroundOut)
+async def get_background(background_id: uuid.UUID, db: DB):
+    result = await db.execute(select(BackgroundDefinition).where(BackgroundDefinition.id == background_id))
+    obj = result.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Background not found")
+    return obj
+
+
+async def _validate_feat_exists(db: AsyncSession, feat_id: uuid.UUID) -> None:
+    feat_result = await db.execute(select(FeatDefinition).where(FeatDefinition.id == feat_id))
+    if not feat_result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Feat {feat_id} not found")
+
+
+async def _validate_items_exist(db: AsyncSession, equipment: list) -> None:
+    for entry in equipment:
+        item_result = await db.execute(select(ItemDefinition).where(ItemDefinition.id == entry.item_id))
+        if not item_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail=f"Item {entry.item_id} not found")
+
+
 @router.post("/backgrounds", response_model=BackgroundOut, status_code=201)
 async def create_background(data: BackgroundCreate, current_user: CurrentUser, db: DB):
-    obj = BackgroundDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
+    await _validate_feat_exists(db, data.feat_id)
+    await _validate_items_exist(db, data.initial_equipment)
+
+    # tool_proficiency is a NOT NULL FK to tool_proficiency_options.name;
+    # resolve/create the lookup row before the initial flush below, since
+    # the column cannot be left unset on insert (unlike ClassDefinition.spell_ability,
+    # which is nullable).
+    tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, [data.tool_proficiency])
+
+    obj = BackgroundDefinition(
+        name=data.name,
+        description=data.description,
+        feat_id=data.feat_id,
+        tool_proficiency=tool_proficiencies[0].name,
+        is_homebrew=True,
+        created_by=current_user.id,
+    )
     db.add(obj)
+    await db.flush()
+    # See create_class for why this refresh is required before reassigning
+    # these relationships (avoids MissingGreenlet on first assignment).
+    await db.refresh(obj, attribute_names=["ability_scores", "skills", "initial_equipment"])
+
+    obj.ability_scores = await _resolve_options(
+        db, AbilityScoreOption, [a.value for a in data.ability_scores]
+    )
+    obj.skills = await resolve_skills(db, data.skills)
+
+    for equipment in data.initial_equipment:
+        db.add(BackgroundInitialEquipment(
+            background_id=obj.id,
+            item_id=equipment.item_id,
+            option=equipment.option,
+            quantity=equipment.quantity,
+        ))
+
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+
+@router.patch("/backgrounds/{background_id}", response_model=BackgroundOut)
+async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, current_user: CurrentUser, db: DB):
+    result = await db.execute(select(BackgroundDefinition).where(BackgroundDefinition.id == background_id))
+    obj = result.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=404, detail="Background not found")
+
+    if data.feat_id is not None:
+        await _validate_feat_exists(db, data.feat_id)
+        obj.feat_id = data.feat_id
+    if data.initial_equipment is not None:
+        await _validate_items_exist(db, data.initial_equipment)
+
+    if data.name is not None:
+        obj.name = data.name
+    if data.description is not None:
+        obj.description = data.description
+    if data.ability_scores is not None:
+        obj.ability_scores = await _resolve_options(
+            db, AbilityScoreOption, [a.value for a in data.ability_scores]
+        )
+    if data.tool_proficiency is not None:
+        tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, [data.tool_proficiency])
+        obj.tool_proficiency = tool_proficiencies[0].name
+    if data.skills is not None:
+        obj.skills = await resolve_skills(db, data.skills)
+    if data.initial_equipment is not None:
+        for entry in list(obj.initial_equipment):
+            await db.delete(entry)
+        await db.flush()
+        for equipment in data.initial_equipment:
+            db.add(BackgroundInitialEquipment(
+                background_id=obj.id,
+                item_id=equipment.item_id,
+                option=equipment.option,
+                quantity=equipment.quantity,
+            ))
+
     await db.commit()
     await db.refresh(obj)
     return obj

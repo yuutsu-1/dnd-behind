@@ -92,6 +92,20 @@ class_skills = Table(
     Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
 )
 
+background_ability_scores = Table(
+    "background_ability_scores",
+    Base.metadata,
+    Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
+    Column("ability_score", String(3), ForeignKey("ability_score_options.name"), primary_key=True),
+)
+
+background_skills = Table(
+    "background_skills",
+    Base.metadata,
+    Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
+    Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
+)
+
 
 class FeatureGrant(Base):
     """
@@ -194,10 +208,27 @@ class BackgroundDefinition(Base):
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str]               = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    feat_id: Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("feat_definitions.id"), nullable=False)
+    tool_proficiency: Mapped[str]   = mapped_column(String(60), ForeignKey("tool_proficiency_options.name"), nullable=False)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    ability_scores: Mapped[list[AbilityScoreOption]] = relationship(
+        secondary=background_ability_scores, lazy="selectin"
+    )
+    skills: Mapped[list[SkillDefinition]] = relationship(
+        secondary=background_skills, lazy="selectin"
+    )
+    feat: Mapped["FeatDefinition"] = relationship(lazy="selectin")
+    initial_equipment: Mapped[list["BackgroundInitialEquipment"]] = relationship(
+        back_populates="background", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    @property
+    def feat_name(self) -> str | None:
+        return self.feat.name if self.feat else None
 
 
 class FeatDefinition(Base):
@@ -275,6 +306,24 @@ class ClassInitialEquipment(Base):
 
     class_def: Mapped["ClassDefinition"] = relationship(back_populates="initial_equipment")
     item: Mapped["ItemDefinition"]       = relationship()
+
+    @property
+    def item_name(self) -> str | None:
+        return self.item.name if self.item else None
+
+
+class BackgroundInitialEquipment(Base):
+    __tablename__ = "background_initial_equipment"
+    __table_args__ = (CheckConstraint("quantity >= 1", name="ck_background_initial_equipment_quantity_positive"),)
+
+    id: Mapped[uuid.UUID]            = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    background_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), nullable=False)
+    item_id: Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), ForeignKey("item_definitions.id"), nullable=False)
+    option: Mapped[str]              = mapped_column(String(10), nullable=False)
+    quantity: Mapped[int]            = mapped_column(Integer, nullable=False, default=1)
+
+    background: Mapped["BackgroundDefinition"] = relationship(back_populates="initial_equipment")
+    item: Mapped["ItemDefinition"]             = relationship()
 
     @property
     def item_name(self) -> str | None:

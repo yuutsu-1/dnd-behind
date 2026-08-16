@@ -61,18 +61,6 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=50), nullable=False),
     sa.PrimaryKeyConstraint('name')
     )
-    op.create_table('background_definitions',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(length=100), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('source', sa.String(length=20), nullable=False),
-    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
-    sa.Column('created_by', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('name')
-    )
     op.create_table('campaigns',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(length=100), nullable=False),
@@ -125,6 +113,22 @@ def upgrade() -> None:
     sa.Column('created_by', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('name')
+    )
+    op.create_table('background_definitions',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('feat_id', sa.UUID(), nullable=False),
+    sa.Column('tool_proficiency', sa.String(length=60), nullable=False),
+    sa.Column('source', sa.String(length=20), nullable=False),
+    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
+    sa.Column('created_by', sa.UUID(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['feat_id'], ['feat_definitions.id'], ),
+    sa.ForeignKeyConstraint(['tool_proficiency'], ['tool_proficiency_options.name'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
@@ -256,6 +260,31 @@ def upgrade() -> None:
     sa.Column('quantity', sa.Integer(), nullable=False),
     sa.CheckConstraint('quantity >= 1', name='ck_class_initial_equipment_quantity_positive'),
     sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('background_ability_scores',
+    sa.Column('background_id', sa.UUID(), nullable=False),
+    sa.Column('ability_score', sa.String(length=3), nullable=False),
+    sa.ForeignKeyConstraint(['ability_score'], ['ability_score_options.name'], ),
+    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('background_id', 'ability_score')
+    )
+    op.create_table('background_skills',
+    sa.Column('background_id', sa.UUID(), nullable=False),
+    sa.Column('skill_id', sa.UUID(), nullable=False),
+    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['skill_id'], ['skill_definitions.id'], ),
+    sa.PrimaryKeyConstraint('background_id', 'skill_id')
+    )
+    op.create_table('background_initial_equipment',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('background_id', sa.UUID(), nullable=False),
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('option', sa.String(length=10), nullable=False),
+    sa.Column('quantity', sa.Integer(), nullable=False),
+    sa.CheckConstraint('quantity >= 1', name='ck_background_initial_equipment_quantity_positive'),
+    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -401,6 +430,9 @@ def downgrade() -> None:
     op.drop_table('characters')
     op.drop_table('subclass_definitions')
     op.drop_table('spell_class_lists')
+    op.drop_table('background_initial_equipment')
+    op.drop_table('background_skills')
+    op.drop_table('background_ability_scores')
     op.drop_table('class_initial_equipment')
     op.drop_table('class_skills')
     op.drop_table('class_weapon_proficiencies')
@@ -414,12 +446,12 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_refresh_tokens_token_hash'), table_name='refresh_tokens')
     op.drop_table('refresh_tokens')
     op.drop_table('item_definitions')
+    op.drop_table('background_definitions')
     op.drop_table('feat_definitions')
     op.drop_table('skill_definitions')
     op.drop_table('class_definitions')
     op.drop_index(op.f('ix_campaigns_invite_code'), table_name='campaigns')
     op.drop_table('campaigns')
-    op.drop_table('background_definitions')
     op.drop_table('weapon_proficiency_options')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')

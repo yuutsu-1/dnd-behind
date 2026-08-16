@@ -155,19 +155,104 @@ class SubclassCreate(BaseModel):
     description: str | None = None
 
 
+class BackgroundInitialEquipmentOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: uuid.UUID
+    background_id: uuid.UUID
+    item_id: uuid.UUID
+    item_name: str
+    option: str
+    quantity: int
+
+
+class BackgroundInitialEquipmentCreate(BaseModel):
+    item_id: uuid.UUID
+    option: str = Field(min_length=1, max_length=10)
+    quantity: int = Field(default=1, ge=1)
+
+
+def _validate_ability_scores_cardinality(v: list) -> list:
+    if len(v) != 3:
+        raise ValueError("ability_scores must have exactly 3 entries")
+    if len(set(v)) != len(v):
+        raise ValueError("ability_scores must not contain duplicates")
+    return v
+
+
+def _validate_skills_cardinality(v: list) -> list:
+    if len(v) != 2:
+        raise ValueError("skills must have exactly 2 entries")
+    names = [s.name for s in v]
+    if len(set(names)) != len(names):
+        raise ValueError("skills must not contain duplicates")
+    return v
+
+
 class BackgroundOut(BaseModel):
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
     name: str
     description: str | None
+    ability_scores: list[AbilityScore]
+    feat_id: uuid.UUID
+    feat_name: str
+    skills: list[SkillOut]
+    tool_proficiency: str
+    initial_equipment: list[BackgroundInitialEquipmentOut]
     source: str
     is_homebrew: bool
+
+    @field_validator("ability_scores", mode="before")
+    @classmethod
+    def _ability_score_names(cls, v: list) -> list:
+        return _pluck(v)
 
 
 class BackgroundCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
+    ability_scores: list[AbilityScore]
+    feat_id: uuid.UUID
+    skills: list[SkillCreate]
+    tool_proficiency: str
+    initial_equipment: list[BackgroundInitialEquipmentCreate] = Field(default_factory=list)
+
+    @field_validator("ability_scores")
+    @classmethod
+    def _check_ability_scores(cls, v: list) -> list:
+        return _validate_ability_scores_cardinality(v)
+
+    @field_validator("skills")
+    @classmethod
+    def _check_skills(cls, v: list) -> list:
+        return _validate_skills_cardinality(v)
+
+
+class BackgroundUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    ability_scores: list[AbilityScore] | None = None
+    feat_id: uuid.UUID | None = None
+    skills: list[SkillCreate] | None = None
+    tool_proficiency: str | None = None
+    initial_equipment: list[BackgroundInitialEquipmentCreate] | None = None
+
+    @field_validator("ability_scores")
+    @classmethod
+    def _check_ability_scores(cls, v: list | None) -> list | None:
+        if v is None:
+            return v
+        return _validate_ability_scores_cardinality(v)
+
+    @field_validator("skills")
+    @classmethod
+    def _check_skills(cls, v: list | None) -> list | None:
+        if v is None:
+            return v
+        return _validate_skills_cardinality(v)
+
 
 class FeatOut(BaseModel):
     model_config = {"from_attributes": True}

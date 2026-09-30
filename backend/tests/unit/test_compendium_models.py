@@ -13,6 +13,7 @@ from app.db.models.compendium import (
     SkillDefinition,
     background_ability_scores,
     background_skills,
+    background_tool_proficiencies,
     class_skills,
 )
 
@@ -104,7 +105,8 @@ class TestBackgroundSkillsJunctionTable:
 class TestBackgroundDefinition:
     def test_has_expected_columns(self):
         columns = _column_names(BackgroundDefinition)
-        assert {"id", "name", "feat_id", "tool_proficiency"} <= columns
+        assert {"id", "name", "feat_id"} <= columns
+        assert "tool_proficiency" not in columns
 
     def test_feat_id_column_has_foreign_key_to_feat_definitions(self):
         column = BackgroundDefinition.__table__.c.feat_id
@@ -113,16 +115,14 @@ class TestBackgroundDefinition:
         fk = next(iter(column.foreign_keys))
         assert fk.target_fullname == "feat_definitions.id"
 
-    def test_tool_proficiency_column_has_foreign_key_to_tool_proficiency_options(self):
-        column = BackgroundDefinition.__table__.c.tool_proficiency
-        assert not column.nullable
-        assert len(column.foreign_keys) == 1
-        fk = next(iter(column.foreign_keys))
-        assert fk.target_fullname == "tool_proficiency_options.name"
+    def test_tool_proficiencies_junction_table_references_tool_proficiency_options(self):
+        assert "background_id" in background_tool_proficiencies.c
+        fks = {fk.target_fullname for fk in background_tool_proficiencies.c.tool_proficiency.foreign_keys}
+        assert fks == {"tool_proficiency_options.name"}
 
     def test_has_expected_relationships(self):
         relationships = _relationship_names(BackgroundDefinition)
-        assert {"ability_scores", "skills", "feat", "initial_equipment"} <= relationships
+        assert {"ability_scores", "skills", "feat", "tool_proficiencies", "initial_equipment"} <= relationships
 
     def test_feat_name_property(self):
         feat = FeatDefinition(id=uuid.uuid4(), name="Alert", category="origin")
@@ -131,7 +131,6 @@ class TestBackgroundDefinition:
             name="Noble",
             feat_id=feat.id,
             feat=feat,
-            tool_proficiency="Gaming Set",
         )
         assert background.feat_name == "Alert"
 

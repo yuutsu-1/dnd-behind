@@ -229,17 +229,10 @@ async def create_background(data: BackgroundCreate, current_user: CurrentUser, d
     await _validate_feat_exists(db, data.feat_id)
     await _validate_items_exist(db, data.initial_equipment)
 
-    # tool_proficiency is a NOT NULL FK to tool_proficiency_options.name;
-    # resolve/create the lookup row before the initial flush below, since
-    # the column cannot be left unset on insert (unlike ClassDefinition.spell_ability,
-    # which is nullable).
-    tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, [data.tool_proficiency])
-
     obj = BackgroundDefinition(
         name=data.name,
         description=data.description,
         feat_id=data.feat_id,
-        tool_proficiency=tool_proficiencies[0].name,
         is_homebrew=True,
         created_by=current_user.id,
     )
@@ -247,12 +240,13 @@ async def create_background(data: BackgroundCreate, current_user: CurrentUser, d
     await db.flush()
     # See create_class for why this refresh is required before reassigning
     # these relationships (avoids MissingGreenlet on first assignment).
-    await db.refresh(obj, attribute_names=["ability_scores", "skills", "initial_equipment"])
+    await db.refresh(obj, attribute_names=["ability_scores", "skills", "tool_proficiencies", "initial_equipment"])
 
     obj.ability_scores = await _resolve_options(
         db, AbilityScoreOption, [a.value for a in data.ability_scores]
     )
     obj.skills = await resolve_skills(db, data.skills)
+    obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
 
     for equipment in data.initial_equipment:
         db.add(BackgroundInitialEquipment(
@@ -288,9 +282,8 @@ async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, cu
         obj.ability_scores = await _resolve_options(
             db, AbilityScoreOption, [a.value for a in data.ability_scores]
         )
-    if data.tool_proficiency is not None:
-        tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, [data.tool_proficiency])
-        obj.tool_proficiency = tool_proficiencies[0].name
+    if data.tool_proficiencies is not None:
+        obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
     if data.skills is not None:
         obj.skills = await resolve_skills(db, data.skills)
     if data.initial_equipment is not None:

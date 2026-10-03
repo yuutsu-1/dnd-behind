@@ -106,6 +106,15 @@ background_skills = Table(
     Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
 )
 
+# Tool proficiency options offered by a background: one entry = fixed
+# proficiency; several = the character picks one of them.
+background_tool_proficiencies = Table(
+    "background_tool_proficiencies",
+    Base.metadata,
+    Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
+    Column("tool_proficiency", String(60), ForeignKey("tool_proficiency_options.name"), primary_key=True),
+)
+
 
 class FeatureGrant(Base):
     """
@@ -209,7 +218,6 @@ class BackgroundDefinition(Base):
     name: Mapped[str]               = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     feat_id: Mapped[uuid.UUID]      = mapped_column(UUID(as_uuid=True), ForeignKey("feat_definitions.id"), nullable=False)
-    tool_proficiency: Mapped[str]   = mapped_column(String(60), ForeignKey("tool_proficiency_options.name"), nullable=False)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -222,6 +230,9 @@ class BackgroundDefinition(Base):
         secondary=background_skills, lazy="selectin"
     )
     feat: Mapped["FeatDefinition"] = relationship(lazy="selectin")
+    tool_proficiencies: Mapped[list[ToolProficiencyOption]] = relationship(
+        secondary=background_tool_proficiencies, lazy="selectin"
+    )
     initial_equipment: Mapped[list["BackgroundInitialEquipment"]] = relationship(
         back_populates="background", cascade="all, delete-orphan", lazy="selectin"
     )

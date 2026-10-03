@@ -9,6 +9,7 @@ from app.db.models.compendium import (
     BackgroundInitialEquipment,
     background_ability_scores,
     background_skills,
+    background_tool_proficiencies,
 )
 from app.enums import AbilityScore
 from app.schemas.compendium import (
@@ -36,7 +37,7 @@ def _noble_kwargs(feat_id: uuid.UUID, item_ids: list[uuid.UUID], **overrides) ->
             SkillCreate(name="History", ability_score=AbilityScore.INT),
             SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
         ],
-        tool_proficiency="Gaming Set",
+        tool_proficiencies=["Gaming Set"],
         initial_equipment=[
             BackgroundInitialEquipmentCreate(item_id=item_ids[0], option="A", quantity=1),
             BackgroundInitialEquipmentCreate(item_id=item_ids[1], option="A", quantity=1),
@@ -65,9 +66,23 @@ class TestCreateBackgroundNobleCase:
         assert obj.feat_id == feat.id
         assert obj.feat_name == "Skilled"
         assert {s.name for s in obj.skills} == {"History", "Persuasion"}
-        assert obj.tool_proficiency == "Gaming Set"
+        assert [t.name for t in obj.tool_proficiencies] == ["Gaming Set"]
         assert len(obj.initial_equipment) == 3
         assert {e.item_name for e in obj.initial_equipment} == {"Fine Clothes", "Signet Ring", "Purse"}
+
+
+    async def test_multiple_tool_proficiency_options_are_persisted(self, db_session):
+        creator = await seed_user(db_session)
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        options = ["Dice Set", "Dragonchess Set", "Playing Card Set"]
+
+        data = BackgroundCreate(
+            **_noble_kwargs(feat.id, [i.id for i in items], tool_proficiencies=options)
+        )
+        obj = await create_background(data, current_user=creator, db=db_session)
+
+        assert {t.name for t in obj.tool_proficiencies} == set(options)
 
 
 class TestCreateBackgroundValidation:
@@ -81,7 +96,7 @@ class TestCreateBackgroundValidation:
                     SkillCreate(name="History", ability_score=AbilityScore.INT),
                     SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
                 ],
-                tool_proficiency="Gaming Set",
+                tool_proficiencies=["Gaming Set"],
             )
 
     async def test_skills_duplicate_rejected_by_schema(self):
@@ -94,7 +109,7 @@ class TestCreateBackgroundValidation:
                     SkillCreate(name="History", ability_score=AbilityScore.INT),
                     SkillCreate(name="History", ability_score=AbilityScore.INT),
                 ],
-                tool_proficiency="Gaming Set",
+                tool_proficiencies=["Gaming Set"],
             )
 
     async def test_nonexistent_feat_id_is_rejected_with_400(self, db_session):
@@ -159,6 +174,11 @@ class TestBackgroundCascadeDelete:
         )
         assert skill_link_result.first() is None
 
+        tool_link_result = await db_session.execute(
+            select(background_tool_proficiencies).where(background_tool_proficiencies.c.background_id == background_id)
+        )
+        assert tool_link_result.first() is None
+
 
 class TestSeedBackgroundInitialEquipmentHelper:
     async def test_helper_creates_row_linked_to_background_and_item(self, db_session):
@@ -203,10 +223,10 @@ class TestUpdateBackground:
         obj = await create_background(data, current_user=creator, db=db_session)
 
         updated = await update_background(
-            obj.id, BackgroundUpdate(tool_proficiency="Musical Instrument"), current_user=creator, db=db_session
+            obj.id, BackgroundUpdate(tool_proficiencies=["Musical Instrument"]), current_user=creator, db=db_session
         )
 
-        assert updated.tool_proficiency == "Musical Instrument"
+        assert [t.name for t in updated.tool_proficiencies] == ["Musical Instrument"]
         # Unrelated fields untouched.
         assert {a.name for a in updated.ability_scores} == {"STR", "INT", "CHA"}
 

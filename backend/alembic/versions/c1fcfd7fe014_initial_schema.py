@@ -121,14 +121,12 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=100), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('feat_id', sa.UUID(), nullable=False),
-    sa.Column('tool_proficiency', sa.String(length=60), nullable=False),
     sa.Column('source', sa.String(length=20), nullable=False),
     sa.Column('is_homebrew', sa.Boolean(), nullable=False),
     sa.Column('created_by', sa.UUID(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
     sa.ForeignKeyConstraint(['feat_id'], ['feat_definitions.id'], ),
-    sa.ForeignKeyConstraint(['tool_proficiency'], ['tool_proficiency_options.name'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
@@ -276,6 +274,13 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['skill_id'], ['skill_definitions.id'], ),
     sa.PrimaryKeyConstraint('background_id', 'skill_id')
+    )
+    op.create_table('background_tool_proficiencies',
+    sa.Column('background_id', sa.UUID(), nullable=False),
+    sa.Column('tool_proficiency', sa.String(length=60), nullable=False),
+    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tool_proficiency'], ['tool_proficiency_options.name'], ),
+    sa.PrimaryKeyConstraint('background_id', 'tool_proficiency')
     )
     op.create_table('background_initial_equipment',
     sa.Column('id', sa.UUID(), nullable=False),
@@ -431,6 +436,7 @@ def downgrade() -> None:
     op.drop_table('subclass_definitions')
     op.drop_table('spell_class_lists')
     op.drop_table('background_initial_equipment')
+    op.drop_table('background_tool_proficiencies')
     op.drop_table('background_skills')
     op.drop_table('background_ability_scores')
     op.drop_table('class_initial_equipment')

@@ -189,6 +189,14 @@ def _validate_skills_cardinality(v: list) -> list:
     return v
 
 
+def _validate_tool_proficiencies(v: list) -> list:
+    if not v:
+        raise ValueError("tool_proficiencies must have at least 1 entry")
+    if len(set(v)) != len(v):
+        raise ValueError("tool_proficiencies must not contain duplicates")
+    return v
+
+
 class BackgroundOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -199,7 +207,8 @@ class BackgroundOut(BaseModel):
     feat_id: uuid.UUID
     feat_name: str
     skills: list[SkillOut]
-    tool_proficiency: str
+    # One entry = fixed proficiency; several = the character picks one.
+    tool_proficiencies: list[str]
     initial_equipment: list[BackgroundInitialEquipmentOut]
     source: str
     is_homebrew: bool
@@ -209,6 +218,11 @@ class BackgroundOut(BaseModel):
     def _ability_score_names(cls, v: list) -> list:
         return _pluck(v)
 
+    @field_validator("tool_proficiencies", mode="before")
+    @classmethod
+    def _tool_proficiency_names(cls, v: list) -> list:
+        return _pluck(v)
+
 
 class BackgroundCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -216,7 +230,7 @@ class BackgroundCreate(BaseModel):
     ability_scores: list[AbilityScore]
     feat_id: uuid.UUID
     skills: list[SkillCreate]
-    tool_proficiency: str
+    tool_proficiencies: list[str]
     initial_equipment: list[BackgroundInitialEquipmentCreate] = Field(default_factory=list)
 
     @field_validator("ability_scores")
@@ -229,6 +243,11 @@ class BackgroundCreate(BaseModel):
     def _check_skills(cls, v: list) -> list:
         return _validate_skills_cardinality(v)
 
+    @field_validator("tool_proficiencies")
+    @classmethod
+    def _check_tool_proficiencies(cls, v: list) -> list:
+        return _validate_tool_proficiencies(v)
+
 
 class BackgroundUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -236,7 +255,7 @@ class BackgroundUpdate(BaseModel):
     ability_scores: list[AbilityScore] | None = None
     feat_id: uuid.UUID | None = None
     skills: list[SkillCreate] | None = None
-    tool_proficiency: str | None = None
+    tool_proficiencies: list[str] | None = None
     initial_equipment: list[BackgroundInitialEquipmentCreate] | None = None
 
     @field_validator("ability_scores")
@@ -252,6 +271,13 @@ class BackgroundUpdate(BaseModel):
         if v is None:
             return v
         return _validate_skills_cardinality(v)
+
+    @field_validator("tool_proficiencies")
+    @classmethod
+    def _check_tool_proficiencies(cls, v: list | None) -> list | None:
+        if v is None:
+            return v
+        return _validate_tool_proficiencies(v)
 
 
 class FeatOut(BaseModel):

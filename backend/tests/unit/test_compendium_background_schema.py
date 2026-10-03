@@ -10,6 +10,7 @@ from app.db.models.compendium import (
     FeatDefinition,
     ItemDefinition,
     SkillDefinition,
+    ToolProficiencyOption,
 )
 from app.enums import AbilityScore
 from app.schemas.compendium import (
@@ -30,7 +31,7 @@ def _noble_kwargs(**overrides) -> dict:
             SkillCreate(name="History", ability_score=AbilityScore.INT),
             SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
         ],
-        tool_proficiency="Gaming Set",
+        tool_proficiencies=["Gaming Set"],
         initial_equipment=[
             BackgroundInitialEquipmentCreate(item_id=uuid.uuid4(), option="A", quantity=1),
             BackgroundInitialEquipmentCreate(item_id=uuid.uuid4(), option="A", quantity=1),
@@ -100,6 +101,28 @@ class TestBackgroundCreateSkillsCardinality:
             )
 
 
+class TestBackgroundCreateToolProficiencies:
+    def test_multiple_options_accepted(self):
+        data = BackgroundCreate(
+            **_noble_kwargs(tool_proficiencies=["Dice Set", "Dragonchess Set", "Playing Card Set"])
+        )
+        assert data.tool_proficiencies == ["Dice Set", "Dragonchess Set", "Playing Card Set"]
+
+    def test_empty_list_rejected(self):
+        with pytest.raises(ValidationError):
+            BackgroundCreate(**_noble_kwargs(tool_proficiencies=[]))
+
+    def test_duplicate_option_rejected(self):
+        with pytest.raises(ValidationError):
+            BackgroundCreate(**_noble_kwargs(tool_proficiencies=["Dice Set", "Dice Set"]))
+
+    def test_missing_field_rejected(self):
+        kwargs = _noble_kwargs()
+        del kwargs["tool_proficiencies"]
+        with pytest.raises(ValidationError):
+            BackgroundCreate(**kwargs)
+
+
 class TestBackgroundInitialEquipmentCreateQuantity:
     def test_quantity_must_be_at_least_one(self):
         with pytest.raises(ValidationError):
@@ -125,10 +148,14 @@ class TestBackgroundUpdatePartial:
                 ]
             )
 
+    def test_partial_tool_proficiencies_empty_rejected(self):
+        with pytest.raises(ValidationError):
+            BackgroundUpdate(tool_proficiencies=[])
+
     def test_only_name_provided_is_valid(self):
         data = BackgroundUpdate(name="Renamed Noble")
         assert data.name == "Renamed Noble"
-        assert data.tool_proficiency is None
+        assert data.tool_proficiencies is None
 
 
 class TestBackgroundOutSerialization:
@@ -144,7 +171,7 @@ class TestBackgroundOutSerialization:
             name="Noble",
             feat_id=feat.id,
             feat=feat,
-            tool_proficiency="Gaming Set",
+            tool_proficiencies=[ToolProficiencyOption(name="Gaming Set")],
             ability_scores=[AbilityScoreOption(name="STR"), AbilityScoreOption(name="INT")],
             skills=[SkillDefinition(id=uuid.uuid4(), name="History", ability_score="INT")],
             initial_equipment=[equipment_entry],
@@ -158,5 +185,5 @@ class TestBackgroundOutSerialization:
         assert out.feat_id == feat.id
         assert out.feat_name == "Skilled"
         assert {s.name for s in out.skills} == {"History"}
-        assert out.tool_proficiency == "Gaming Set"
+        assert out.tool_proficiencies == ["Gaming Set"]
         assert out.initial_equipment[0].item_name == "Signet Ring"

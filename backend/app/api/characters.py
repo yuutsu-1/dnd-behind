@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.campaign import CampaignMember
-from app.db.models.character import Character, CharacterClass, CharacterInventory
+from app.db.models.character import Character, CharacterInventory
 from app.schemas.character import (
     AddItemRequest,
     CharacterClassCreate,
@@ -14,6 +14,9 @@ from app.schemas.character import (
     CharacterClassUpdate,
     CharacterCreate,
     CharacterOut,
+    CharacterSkillCreate,
+    CharacterSkillExpertiseUpdate,
+    CharacterSkillOut,
     CharacterUpdate,
     CharacterWithInventory,
     HitDiceUsedUpdate,
@@ -54,14 +57,7 @@ async def my_characters(current_user: CurrentUser, db: DB):
             Character.user_id == current_user.id,
             Character.is_active == True,  # noqa: E712
         )
-        .options(
-            selectinload(Character.owner),
-            selectinload(Character.campaign),
-            selectinload(Character.species),
-            selectinload(Character.background),
-            selectinload(Character.classes).selectinload(CharacterClass.class_),
-            selectinload(Character.classes).selectinload(CharacterClass.subclass),
-        )
+        .options(*char_service._character_eager_load_options())
     )
     return list(result.scalars().all())
 
@@ -257,6 +253,54 @@ async def update_character_class_hit_dice(
         character.campaign_id, "character.class.hit_dice", character.id,
         {"class_entry_id": str(class_entry_id), "hit_dice_used": data.hit_dice_used},
         current_user.id,
+    )
+    return entry
+
+
+@router.post("/{character_id}/skills", response_model=CharacterSkillOut, status_code=201)
+async def add_character_skill(character_id: uuid.UUID, data: CharacterSkillCreate, current_user: CurrentUser, db: DB):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    entry = await char_service.add_character_skill(db, character, data)
+
+    await _broadcast(
+        character.campaign_id, "character.skill.add", character.id,
+        {"skill_id": str(data.skill_id), "source": data.source},
+        current_user.id,
+    )
+    return entry
+
+
+@router.delete("/{character_id}/skills/{skill_id}", status_code=204)
+async def remove_character_skill(character_id: uuid.UUID, skill_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    await char_service.remove_character_skill(db, character, skill_id)
+
+    await _broadcast(
+        character.campaign_id, "character.skill.remove", character.id,
+        {"skill_id": str(skill_id)}, current_user.id,
+    )
+
+
+@router.patch("/{character_id}/skills/{skill_id}", response_model=CharacterSkillOut)
+async def update_character_skill_expertise(
+    character_id: uuid.UUID,
+    skill_id: uuid.UUID,
+    data: CharacterSkillExpertiseUpdate,
+    current_user: CurrentUser,
+    db: DB,
+):
+    character = await char_service.get_character_or_404(db, character_id)
+    await char_service.assert_owner_or_dm(db, character, current_user.id)
+
+    entry = await char_service.set_skill_expertise(db, character, skill_id, data.expertise)
+
+    await _broadcast(
+        character.campaign_id, "character.skill.expertise", character.id,
+        {"skill_id": str(skill_id), "expertise": data.expertise}, current_user.id,
     )
     return entry
 

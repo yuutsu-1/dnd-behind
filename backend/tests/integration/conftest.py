@@ -18,6 +18,7 @@ from app.db.models.character import (  # noqa: E402
     CharacterAbilityScore,
     CharacterClass,
     CharacterInventory,
+    CharacterSkill,
 )
 from app.db.models.compendium import (  # noqa: E402
     AbilityScoreOption,
@@ -73,6 +74,21 @@ async def db_session(db_engine):
         await session.close()
         await outer_transaction.rollback()
         await connection.close()
+
+
+@pytest.fixture
+def no_redis(monkeypatch):
+    """Replace the Redis publisher used by `_broadcast` with a recorder (no real Redis in tests).
+    Returns the list of (channel, parsed_message) published."""
+    import json
+
+    published: list[tuple[str, dict]] = []
+
+    async def fake_publish(channel, message):
+        published.append((channel, json.loads(message)))
+
+    monkeypatch.setattr("app.api.characters.publish", fake_publish)
+    return published
 
 
 class QueryCounter:
@@ -412,6 +428,40 @@ async def seed_skill(session: AsyncSession, **overrides) -> SkillDefinition:
     session.add(obj)
     await session.flush()
     return obj
+
+
+async def seed_character_skill(
+    session: AsyncSession, character: Character, skill: SkillDefinition, **overrides
+) -> CharacterSkill:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=character.id,
+        skill_id=skill.id,
+        source="other",
+        expertise=False,
+    )
+    defaults.update(overrides)
+    obj = CharacterSkill(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+async def seed_class_skill(session: AsyncSession, class_def: ClassDefinition, *skills: SkillDefinition) -> None:
+    """Link skills to a class's `class_skills` pool (raw association insert, no lazy load)."""
+    from app.db.models.compendium import class_skills
+    for skill in skills:
+        await session.execute(class_skills.insert().values(class_id=class_def.id, skill_id=skill.id))
+    session.expire(class_def, ["skills"])
+
+
+async def seed_background_skill(
+    session: AsyncSession, background: BackgroundDefinition, *skills: SkillDefinition
+) -> None:
+    from app.db.models.compendium import background_skills
+    for skill in skills:
+        await session.execute(background_skills.insert().values(background_id=background.id, skill_id=skill.id))
+    session.expire(background, ["skills"])
 
 
 async def seed_class_initial_equipment(

@@ -6,14 +6,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.character import Character, CharacterAbilityScore, CharacterClass, CharacterInventory
+from app.db.models.character import (
+    Character,
+    CharacterAbilityScore,
+    CharacterClass,
+    CharacterInventory,
+    CharacterSkill,
+)
 from app.db.models.campaign import CampaignMember
-from app.db.models.compendium import ClassDefinition, SubclassDefinition
+from app.db.models.compendium import BackgroundDefinition, ClassDefinition, SkillDefinition, SubclassDefinition
 from app.schemas.character import (
     AddItemRequest,
     CharacterClassCreate,
     CharacterClassUpdate,
     CharacterCreate,
+    CharacterSkillCreate,
     CharacterUpdate,
     HitDiceUsedUpdate,
     HPUpdate,
@@ -31,6 +38,7 @@ def _character_eager_load_options() -> list:
         selectinload(Character.background),
         selectinload(Character.classes).selectinload(CharacterClass.class_),
         selectinload(Character.classes).selectinload(CharacterClass.subclass),
+        selectinload(Character.skills).selectinload(CharacterSkill.skill),
         selectinload(Character.inventory).selectinload(CharacterInventory.item),
         selectinload(Character.inventory).selectinload(CharacterInventory.added_by_user),
     ]
@@ -76,25 +84,51 @@ async def create_character(
     user_id: uuid.UUID,
     campaign_id: uuid.UUID | None = None,
 ) -> Character:
-    await ensure_ability_score_options(db, set(data.ability_scores.keys()))
-    character = Character(
-        user_id=user_id,
-        campaign_id=campaign_id,
-        name=data.name,
-        species_id=data.species_id,
-        background_id=data.background_id,
-        ability_scores=[
-            CharacterAbilityScore(ability_score=name, value=value)
-            for name, value in data.ability_scores.items()
-        ],
-        appearance=data.appearance,
-        notes=data.notes,
-    )
-    db.add(character)
-    await db.commit()
+    # Everything (character, initial class, skills) is validated before the
+    # character is added to the session and persisted by a single commit; any
+    # validation failure rolls the whole transaction back.
+    try:
+        await ensure_ability_score_options(db, set(data.ability_scores.keys()))
+        character = Character(
+            user_id=user_id,
+            campaign_id=campaign_id,
+            name=data.name,
+            species_id=data.species_id,
+            background_id=data.background_id,
+            ability_scores=[
+                CharacterAbilityScore(ability_score=name, value=value)
+                for name, value in data.ability_scores.items()
+            ],
+            appearance=data.appearance,
+            notes=data.notes,
+        )
+
+        if data.initial_class is not None:
+            klass = await _validate_class_assignment(db, character, data.initial_class)
+            character.classes.append(
+                CharacterClass(
+                    class_id=data.initial_class.class_id,
+                    level=data.initial_class.level,
+                    subclass_id=data.initial_class.subclass_id,
+                    hit_dice_used=0,
+                    class_=klass,
+                )
+            )
+
+        if data.background_id is not None:
+            await _sync_background_skills(db, character, data.background_id)
+
+        for item in data.skills:
+            await _build_character_skill(db, character, item.skill_id, item.source)
+
+        db.add(character)
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
     await db.refresh(
         character,
-        attribute_names=["owner", "campaign", "species", "background", "classes", "ability_scores"],
+        attribute_names=["owner", "campaign", "species", "background", "classes", "skills", "ability_scores"],
     )
     return character
 
@@ -106,6 +140,11 @@ async def update_character(
 ) -> Character:
     update_data = data.model_dump(exclude_none=True)
     ability_scores_update = update_data.pop("ability_scores", None)
+    new_background_id = update_data.pop("background_id", None)
+
+    if new_background_id is not None and new_background_id != character.background_id:
+        await _sync_background_skills(db, character, new_background_id)
+        character.background_id = new_background_id
 
     for field, value in update_data.items():
         setattr(character, field, value)
@@ -125,6 +164,127 @@ async def update_character(
     await db.commit()
     await db.refresh(character)
     return character
+
+
+async def _get_skill_or_404(db: AsyncSession, skill_id: uuid.UUID) -> SkillDefinition:
+    result = await db.execute(select(SkillDefinition).where(SkillDefinition.id == skill_id))
+    skill = result.scalar_one_or_none()
+    if not skill:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    return skill
+
+
+async def _get_background_or_404(db: AsyncSession, background_id: uuid.UUID) -> BackgroundDefinition:
+    result = await db.execute(select(BackgroundDefinition).where(BackgroundDefinition.id == background_id))
+    background = result.scalar_one_or_none()
+    if not background:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Background not found")
+    return background
+
+
+def _bad_request(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+
+async def _build_character_skill(
+    db: AsyncSession,
+    character: Character,
+    skill_id: uuid.UUID,
+    source: str,
+) -> CharacterSkill:
+    """Validate the rules for giving `character` a skill from `source` and append the
+    new row to `character.skills` (no commit). Works for persisted and not-yet-persisted
+    characters, so batch creation and the sub-resource endpoint share the same rules."""
+    skill = await _get_skill_or_404(db, skill_id)
+
+    if any(row.skill_id == skill.id for row in character.skills):
+        raise _bad_request("Character already has this skill")
+
+    if source == "class":
+        if not character.classes:
+            raise _bad_request("Character has no class that grants skills")
+        # Only the first class (starting class) grants skill proficiencies.
+        klass = character.classes[0].class_
+        if skill.id not in {s.id for s in klass.skills}:
+            raise _bad_request("Skill is not in the first class's skill list")
+        already_from_class = sum(1 for row in character.skills if row.source == "class")
+        if already_from_class + 1 > klass.skill_choices:
+            raise _bad_request(f"Class grants at most {klass.skill_choices} skills")
+    elif source == "background":
+        if character.background_id is None:
+            raise _bad_request("Character has no background")
+        background = await _get_background_or_404(db, character.background_id)
+        if skill.id not in {s.id for s in background.skills}:
+            raise _bad_request("Skill does not belong to the character's background")
+
+    entry = CharacterSkill(skill_id=skill.id, source=source, expertise=False, skill=skill)
+    character.skills.append(entry)
+    return entry
+
+
+async def _sync_background_skills(
+    db: AsyncSession,
+    character: Character,
+    new_background_id: uuid.UUID,
+) -> None:
+    """Make the character's `source="background"` rows match `new_background_id`'s skills.
+    Rows from other sources are never touched; skills already owned through another
+    source are not duplicated."""
+    background = await _get_background_or_404(db, new_background_id)
+    new_skill_ids = {s.id for s in background.skills}
+
+    for row in list(character.skills):
+        if row.source == "background" and row.skill_id not in new_skill_ids:
+            character.skills.remove(row)
+
+    owned = {row.skill_id for row in character.skills}
+    for skill in background.skills:
+        if skill.id not in owned:
+            character.skills.append(CharacterSkill(skill_id=skill.id, source="background", expertise=False, skill=skill))
+
+
+async def add_character_skill(
+    db: AsyncSession,
+    character: Character,
+    data: CharacterSkillCreate,
+) -> CharacterSkill:
+    entry = await _build_character_skill(db, character, data.skill_id, data.source)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise _bad_request("Character already has this skill")
+    await db.refresh(entry, attribute_names=["skill"])
+    return entry
+
+
+async def remove_character_skill(
+    db: AsyncSession,
+    character: Character,
+    skill_id: uuid.UUID,
+) -> None:
+    entry = next((row for row in character.skills if row.skill_id == skill_id), None)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character does not have this skill")
+    character.skills.remove(entry)  # delete-orphan removes the row
+    await db.commit()
+
+
+async def set_skill_expertise(
+    db: AsyncSession,
+    character: Character,
+    skill_id: uuid.UUID,
+    expertise: bool,
+) -> CharacterSkill:
+    # Expertise is not restricted by class or quantity: class features/feats that grant
+    # it belong to the (out of scope) feature engine.
+    entry = next((row for row in character.skills if row.skill_id == skill_id), None)
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character does not have this skill")
+    entry.expertise = expertise
+    await db.commit()
+    await db.refresh(entry, attribute_names=["skill"])
+    return entry
 
 
 async def apply_hp_update(
@@ -235,11 +395,12 @@ def _validate_subclass_assignment(klass: ClassDefinition, subclass: SubclassDefi
         )
 
 
-async def add_character_class(
+async def _validate_class_assignment(
     db: AsyncSession,
     character: Character,
     data: CharacterClassCreate,
-) -> CharacterClass:
+) -> ClassDefinition:
+    """Shared rules for giving `character` a new class entry (no persistence)."""
     klass = await _get_class_definition_or_404(db, data.class_id)
 
     if any(entry.class_id == data.class_id for entry in character.classes):
@@ -257,6 +418,16 @@ async def add_character_class(
     if data.subclass_id is not None:
         subclass = await _get_subclass_definition_or_404(db, data.subclass_id)
         _validate_subclass_assignment(klass, subclass, data.level)
+
+    return klass
+
+
+async def add_character_class(
+    db: AsyncSession,
+    character: Character,
+    data: CharacterClassCreate,
+) -> CharacterClass:
+    await _validate_class_assignment(db, character, data)
 
     entry = CharacterClass(
         character_id=character.id,

@@ -53,6 +53,7 @@ class FakeAsyncSession:
         self.add = MagicMock()
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
+        self.rollback = AsyncMock()
         self.flush = AsyncMock()
         self.delete = AsyncMock()
 

@@ -3,6 +3,7 @@ import uuid
 import pytest
 from fastapi import HTTPException
 
+from app.db.models.compendium import BackgroundDefinition
 from app.schemas.character import AddItemRequest, CharacterCreate, CharacterUpdate, HPUpdate
 from app.services.character import (
     add_item,
@@ -93,10 +94,14 @@ class TestCreateCharacter:
     async def test_persists_character_with_propagated_fields(self, fake_db):
         user_id = uuid.uuid4()
         campaign_id = uuid.uuid4()
+        # `background_id` is now resolved (to derive the automatic background skills),
+        # so the lookup must find a (skill-less) background.
+        background = BackgroundDefinition(id=uuid.uuid4(), skills=[])
+        fake_db.execute.return_value = make_result(scalar=background)
         data = CharacterCreate(
             name="Aragorn",
             species_id=uuid.uuid4(),
-            background_id=uuid.uuid4(),
+            background_id=background.id,
             ability_scores={"STR": 16, "DEX": 12, "CON": 14, "INT": 10, "WIS": 12, "CHA": 14},
             appearance={"hair": "dark"},
             notes="A ranger",
@@ -120,7 +125,7 @@ class TestCreateCharacter:
         fake_db.commit.assert_awaited_once()
         fake_db.refresh.assert_awaited_once_with(
             character,
-            attribute_names=["owner", "campaign", "species", "background", "classes", "ability_scores"],
+            attribute_names=["owner", "campaign", "species", "background", "classes", "skills", "ability_scores"],
         )
 
     async def test_campaign_id_optional_defaults_to_none(self, fake_db):
@@ -332,3 +337,77 @@ class TestListCharactersForCampaign:
 
         result = await list_characters_for_campaign(fake_db, campaign_id)
         assert result == characters
+
+
+class TestCharacterSkillService:
+    async def test_add_skill_unknown_skill_404(self, fake_db):
+        from app.schemas.character import CharacterSkillCreate
+        from app.services.character import add_character_skill
+
+        fake_db.execute.return_value = make_result(scalar=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await add_character_skill(
+                fake_db, make_character(), CharacterSkillCreate(skill_id=uuid.uuid4(), source="other")
+            )
+        assert exc_info.value.status_code == 404
+        fake_db.commit.assert_not_awaited()
+
+    async def test_add_class_skill_without_class_400(self, fake_db):
+        from app.db.models.compendium import SkillDefinition
+        from app.schemas.character import CharacterSkillCreate
+        from app.services.character import add_character_skill
+
+        skill = SkillDefinition(id=uuid.uuid4(), name="Arcana", ability_score="INT")
+        fake_db.execute.return_value = make_result(scalar=skill)
+        with pytest.raises(HTTPException) as exc_info:
+            await add_character_skill(
+                fake_db, make_character(), CharacterSkillCreate(skill_id=skill.id, source="class")
+            )
+        assert exc_info.value.status_code == 400
+        fake_db.commit.assert_not_awaited()
+
+    async def test_add_skill_commits_and_attaches_row(self, fake_db):
+        from app.db.models.compendium import SkillDefinition
+        from app.schemas.character import CharacterSkillCreate
+        from app.services.character import add_character_skill
+
+        skill = SkillDefinition(id=uuid.uuid4(), name="Arcana", ability_score="INT")
+        fake_db.execute.return_value = make_result(scalar=skill)
+        character = make_character()
+
+        entry = await add_character_skill(
+            fake_db, character, CharacterSkillCreate(skill_id=skill.id, source="feat")
+        )
+
+        assert entry in character.skills
+        assert (entry.skill_name, entry.ability_score, entry.expertise) == ("Arcana", "INT", False)
+        fake_db.commit.assert_awaited_once()
+
+    async def test_remove_skill_not_owned_404(self, fake_db):
+        from app.services.character import remove_character_skill
+
+        with pytest.raises(HTTPException) as exc_info:
+            await remove_character_skill(fake_db, make_character(), uuid.uuid4())
+        assert exc_info.value.status_code == 404
+
+    async def test_create_character_rolls_back_on_validation_failure(self, fake_db):
+        from app.schemas.character import CharacterSkillCreate
+
+        fake_db.execute.return_value = make_result(scalar=None)  # skill lookup finds nothing
+        data = CharacterCreate(name="X", skills=[CharacterSkillCreate(skill_id=uuid.uuid4(), source="other")])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_character(fake_db, data, user_id=uuid.uuid4())
+
+        assert exc_info.value.status_code == 404
+        fake_db.rollback.assert_awaited_once()
+        fake_db.commit.assert_not_awaited()
+
+    async def test_update_with_unchanged_background_id_does_not_touch_skills(self, fake_db):
+        background_id = uuid.uuid4()
+        character = make_character(background_id=background_id)
+
+        await update_character(fake_db, character, CharacterUpdate(background_id=background_id))
+
+        fake_db.execute.assert_not_awaited()
+        assert character.skills == []

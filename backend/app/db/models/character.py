@@ -29,7 +29,7 @@ class Character(Base):
     conditions: Mapped[list]                = mapped_column(JSONB, nullable=False, default=list)
     exhaustion_level: Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
     inspiration: Mapped[bool]               = mapped_column(Boolean, default=False)
-    choices: Mapped[dict]                   = mapped_column(JSONB, nullable=False, default=dict) #TODO: Criar tabela de traços de classes e especies ganhos por nível e se um traço é múltipla escolha então salvarei o traço escolhido em outra tabela de many to one.
+    choices: Mapped[dict]                   = mapped_column(JSONB, nullable=False, default=dict) # Perícias NÃO ficam mais aqui: vivem em `character_skills` (CharacterSkill). #TODO: Criar tabela de traços de classes e especies ganhos por nível e se um traço é múltipla escolha então salvarei o traço escolhido em outra tabela de many to one.
     spell_slots_remaining: Mapped[dict]     = mapped_column(JSONB, nullable=False, default=dict)
     appearance: Mapped[dict]                = mapped_column(JSONB, nullable=False, default=dict)
     notes: Mapped[str | None]               = mapped_column(Text)
@@ -46,6 +46,7 @@ class Character(Base):
     background: Mapped["BackgroundDefinition"] = relationship(foreign_keys=[background_id])  # noqa: F821
     classes: Mapped[list["CharacterClass"]] = relationship(back_populates="character", cascade="all, delete-orphan", lazy="selectin")
     ability_scores: Mapped[list["CharacterAbilityScore"]] = relationship(back_populates="character", cascade="all, delete-orphan", lazy="selectin")
+    skills: Mapped[list["CharacterSkill"]] = relationship(back_populates="character", cascade="all, delete-orphan", lazy="selectin")
     inventory: Mapped[list["CharacterInventory"]] = relationship(back_populates="character", cascade="all, delete-orphan")
     feats: Mapped[list["CharacterFeat"]]    = relationship(back_populates="character", cascade="all, delete-orphan")
     spells: Mapped[list["CharacterSpell"]]  = relationship(back_populates="character", cascade="all, delete-orphan")
@@ -107,6 +108,29 @@ class CharacterClass(Base):
     @property
     def hit_dice_remaining(self) -> int:
         return self.level - self.hit_dice_used
+
+
+class CharacterSkill(Base):
+    """One row per skill proficiency a character has, with where it came from and expertise."""
+    __tablename__ = "character_skills"
+    __table_args__ = (UniqueConstraint("character_id", "skill_id"),)
+
+    id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"))
+    skill_id: Mapped[uuid.UUID]     = mapped_column(UUID(as_uuid=True), ForeignKey("skill_definitions.id"), nullable=False)
+    source: Mapped[str]             = mapped_column(String(20), nullable=False)     # "class" | "background" | "species" | "feat" | "other"
+    expertise: Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+    character: Mapped["Character"]  = relationship(back_populates="skills")
+    skill: Mapped["SkillDefinition"] = relationship(lazy="selectin")  # noqa: F821
+
+    @property
+    def skill_name(self) -> str | None:
+        return self.skill.name if self.skill else None
+
+    @property
+    def ability_score(self) -> str | None:
+        return self.skill.ability_score if self.skill else None
 
 
 class CharacterAbilityScore(Base):

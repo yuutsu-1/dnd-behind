@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 class InventoryItemOut(BaseModel):
@@ -32,11 +34,40 @@ class UpdateInventoryItem(BaseModel):
 
 _ABILITY_SCORES_DEFAULT = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
 
+SkillSource = Literal["class", "background", "species", "feat", "other"]
+
+
+class CharacterSkillCreate(BaseModel):
+    skill_id: uuid.UUID
+    source: SkillSource
+
+
+class CharacterSkillExpertiseUpdate(BaseModel):
+    expertise: bool
+
+
+class CharacterSkillOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    skill_id: uuid.UUID
+    skill_name: str | None
+    ability_score: str | None
+    source: str
+    expertise: bool
+
+
+class CharacterClassCreate(BaseModel):
+    class_id: uuid.UUID
+    level: int = Field(default=1, ge=1, le=20)
+    subclass_id: uuid.UUID | None = None
+
 
 class CharacterCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     species_id: uuid.UUID | None = None
     background_id: uuid.UUID | None = None
+    initial_class: CharacterClassCreate | None = None
+    skills: list[CharacterSkillCreate] = Field(default_factory=list)
     ability_scores: dict = Field(default_factory=lambda: dict(_ABILITY_SCORES_DEFAULT))
     appearance: dict = Field(default_factory=dict)
     notes: str | None = None
@@ -44,6 +75,7 @@ class CharacterCreate(BaseModel):
 
 class CharacterUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    background_id: uuid.UUID | None = None
     experience_points: int | None = Field(default=None, ge=0)
     current_hp: int | None = None
     max_hp: int | None = None
@@ -80,12 +112,6 @@ class CharacterClassOut(BaseModel):
     hit_dice_remaining: int
 
 
-class CharacterClassCreate(BaseModel):
-    class_id: uuid.UUID
-    level: int = Field(default=1, ge=1, le=20)
-    subclass_id: uuid.UUID | None = None
-
-
 class CharacterClassUpdate(BaseModel):
     level: int | None = Field(default=None, ge=1, le=20)
     subclass_id: uuid.UUID | None = None
@@ -113,6 +139,7 @@ class CharacterOut(BaseModel):
     background_id: uuid.UUID | None
     background_name: str | None
     classes: list[CharacterClassOut]
+    skills: list[CharacterSkillOut]
     ability_scores: dict[str, int]
     current_hp: int
     max_hp: int

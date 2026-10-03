@@ -17,6 +17,7 @@ from app.db.models.compendium import (
 from app.db.models.character import (
     Character,
     CharacterInventory,
+    CharacterSkill,
     CharacterFeat,
     CharacterSpell,
     CharacterResource,
@@ -42,6 +43,7 @@ __all__ = [
     "ItemDefinition",
     "Character",
     "CharacterInventory",
+    "CharacterSkill",
     "CharacterFeat",
     "CharacterSpell",
     "CharacterResource",

@@ -197,8 +197,9 @@ class TestBackgroundOutSerialization:
         assert [(s.code, s.name, s.ability_code) for s in out.skills] == [
             ("history", "History", "int"), ("persuasion", "Persuasion", "cha"),
         ]
+        # Canonical grant order (kind, then target code), not insertion order.
         assert [(g.kind, g.target_name) for g in out.proficiency_grants] == [
-            ("skill", "Persuasion"), ("tool_category", "Gaming Set"), ("skill", "History"),
+            ("skill", "History"), ("skill", "Persuasion"), ("tool_category", "Gaming Set"),
         ]
         assert "tool_proficiencies" not in BackgroundOut.model_fields
         assert out.initial_equipment[0].item_name == "Signet Ring"

@@ -124,3 +124,31 @@ async def test_patch_without_grants_keeps_them(api_client, setup):
     assert sorted(g["id"] for g in response.json()["proficiency_grants"]) == sorted(
         g["id"] for g in created["proficiency_grants"]
     )
+
+
+async def test_grants_come_out_in_the_grant_list_order(api_client, setup):
+    shuffled = list(reversed(SOLDIER_GRANTS))
+    response = await api_client.post(
+        BASE, json=_payload(setup, proficiency_grants=shuffled), headers=auth_headers(setup["a"])
+    )
+    assert response.status_code == 201, response.text
+    kinds = [(g["kind"], g["skill_code"] or g["tool_category_code"]) for g in response.json()["proficiency_grants"]]
+    assert kinds == [("skill", "athletics"), ("skill", "intimidation"), ("tool_category", "gaming_set")]
+
+
+@pytest.mark.parametrize("old_field,value", [
+    ("skills", ["athletics", "intimidation"]),
+    ("tool_proficiencies", ["dice_set"]),
+    ("unknown_field", 1),
+])
+async def test_unknown_or_removed_fields_are_422_on_create_and_patch(api_client, db_session, setup, old_field, value):
+    headers = auth_headers(setup["a"])
+    before = await _count(db_session, BackgroundDefinition)
+    response = await api_client.post(BASE, json=_payload(setup, **{old_field: value}), headers=headers)
+    assert response.status_code == 422
+    assert await _count(db_session, BackgroundDefinition) == before
+
+    created = await api_client.post(BASE, json=_payload(setup), headers=headers)
+    assert created.status_code == 201, created.text
+    patched = await api_client.patch(f"{BASE}/{created.json()['id']}", json={old_field: value}, headers=headers)
+    assert patched.status_code == 422

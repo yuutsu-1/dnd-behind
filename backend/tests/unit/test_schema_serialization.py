@@ -254,8 +254,9 @@ class TestClassOutSkillsAndInitialEquipment:
         ])
         out = ClassOut.model_validate(klass, from_attributes=True)
         assert out.saving_throw_proficiencies == ["con", "str"]
+        # Canonical grant order (kind, then target code), not insertion order.
         assert [(g.kind, g.target_name) for g in out.proficiency_grants] == [
-            ("saving_throw", "Strength"), ("armor_category", "Shield"), ("saving_throw", "Constitution"),
+            ("armor_category", "Shield"), ("saving_throw", "Constitution"), ("saving_throw", "Strength"),
         ]
 
     def test_skills_and_initial_equipment_populated_from_relationships(self):

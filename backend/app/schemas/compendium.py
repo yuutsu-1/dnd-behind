@@ -66,6 +66,13 @@ def _pluck_codes(v: list) -> list:
     return v
 
 
+def _sorted_grants(v: list) -> list:
+    """ORM grants -> the canonical order of GET /proficiency-grants."""
+    if v and hasattr(v[0], "sort_key"):
+        return sorted(v, key=lambda grant: grant.sort_key)
+    return v
+
+
 class SkillOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -118,12 +125,20 @@ class ClassOut(BaseModel):
     def _codes(cls, v: list) -> list:
         return _pluck_codes(v)
 
+    @field_validator("proficiency_grants", mode="before")
+    @classmethod
+    def _grant_order(cls, v: list) -> list:
+        return _sorted_grants(v)
+
 
 class ClassCreate(BaseModel):
     """Every reference field takes codes that must exist and be visible to the caller
     (400 otherwise; same message whether the code is unknown or invisible).
     `proficiency_grants` takes descriptors of any kind (saving throws included); the
-    server reuses the existing grant for each target or creates it."""
+    server reuses the existing grant for each target or creates it. Unknown fields
+    (e.g. the removed `armor_proficiencies`) are a 422."""
+
+    model_config = {"extra": "forbid"}
 
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
@@ -220,10 +235,18 @@ class BackgroundOut(BaseModel):
     def _codes(cls, v: list) -> list:
         return _pluck_codes(v)
 
+    @field_validator("proficiency_grants", mode="before")
+    @classmethod
+    def _grant_order(cls, v: list) -> list:
+        return _sorted_grants(v)
+
 
 class BackgroundCreate(BaseModel):
     """Reference fields take codes that must exist and be visible to the caller (400).
-    `proficiency_grants`: exactly 2 skills, at least 1 tool or tool category, no other kind."""
+    `proficiency_grants`: exactly 2 skills, at least 1 tool or tool category, no other kind.
+    Unknown fields (e.g. the removed `skills`) are a 422."""
+
+    model_config = {"extra": "forbid"}
 
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
@@ -244,7 +267,10 @@ class BackgroundCreate(BaseModel):
 
 
 class BackgroundUpdate(BaseModel):
-    """`proficiency_grants`, when sent, replaces the whole set (same rules as on create)."""
+    """`proficiency_grants`, when sent, replaces the whole set (same rules as on create).
+    Unknown fields are a 422."""
+
+    model_config = {"extra": "forbid"}
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = None

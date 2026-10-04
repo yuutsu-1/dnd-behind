@@ -85,16 +85,10 @@ async def _create(
     return grant
 
 
-def _list_order(grant: ProficiencyGrant) -> tuple:
-    required = grant.required_weapon_property_code
-    return (grant.kind, grant.target_code, required is not None, required or "", str(grant.id))
-
-
 async def list_grants(db: AsyncSession) -> list[ProficiencyGrant]:
-    """Every grant (grants are global), ordered by kind, target code, required weapon
-    property (none first) and id."""
+    """Every grant (grants are global), in the canonical `ProficiencyGrant.sort_key` order."""
     grants = (await db.execute(select(ProficiencyGrant))).unique().scalars().all()
-    return sorted(grants, key=_list_order)
+    return sorted(grants, key=lambda grant: grant.sort_key)
 
 
 async def get_grant(db: AsyncSession, grant_id) -> ProficiencyGrant | None:

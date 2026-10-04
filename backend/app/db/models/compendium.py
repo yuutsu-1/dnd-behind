@@ -141,6 +141,12 @@ class ProficiencyGrant(Base):
         prop = self.required_weapon_property
         return prop.name if prop is not None else None
 
+    @property
+    def sort_key(self) -> tuple:
+        """Canonical order of grants: kind, target code, required weapon property (none first), id."""
+        required = self.required_weapon_property_code
+        return (self.kind or "", self.target_code or "", required is not None, required or "", str(self.id))
+
 
 class_proficiency_grants = Table(
     "class_proficiency_grants",

@@ -116,3 +116,41 @@ async def test_list_and_detail_bring_the_grants(api_client, users):
     listed = (await api_client.get(BASE, params={"search": created["name"]})).json()
     assert len(listed) == 1
     assert len(listed[0]["proficiency_grants"]) == 7
+
+
+def _grant_order(grant: dict) -> tuple:
+    """Same key as GET /proficiency-grants: kind, target code, required property (none first)."""
+    target = next(
+        grant[key] for key in grant
+        if key.endswith(("_code", "_id")) and key != "required_weapon_property_code" and grant[key] is not None
+    )
+    required = grant["required_weapon_property_code"]
+    return (grant["kind"], target, required is not None, required or "", grant["id"])
+
+
+async def test_grants_come_out_in_the_grant_list_order(api_client, users):
+    shuffled = list(reversed(SPEC_GRANTS))
+    response = await api_client.post(
+        BASE, json=_payload(proficiency_grants=shuffled), headers=auth_headers(users["a"])
+    )
+    assert response.status_code == 201, response.text
+    grants = response.json()["proficiency_grants"]
+    assert grants == sorted(grants, key=_grant_order)
+    detail = await api_client.get(f"{BASE}/{response.json()['id']}")
+    assert detail.json()["proficiency_grants"] == grants
+
+
+@pytest.mark.parametrize("old_field,value", [
+    ("saving_throw_proficiencies", ["str"]),
+    ("armor_proficiencies", ["light"]),
+    ("weapon_proficiencies", ["simple"]),
+    ("tool_proficiencies", ["herbalism_kit"]),
+    ("unknown_field", 1),
+])
+async def test_unknown_or_removed_fields_are_422(api_client, db_session, users, old_field, value):
+    before = await _count(db_session, ClassDefinition)
+    response = await api_client.post(
+        BASE, json=_payload(**{old_field: value}), headers=auth_headers(users["a"])
+    )
+    assert response.status_code == 422
+    assert await _count(db_session, ClassDefinition) == before

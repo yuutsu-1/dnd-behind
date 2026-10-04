@@ -160,6 +160,7 @@ class ChallengeRating(CodeMixin, Base):
     __tablename__ = "challenge_ratings"
     __table_args__ = (
         CheckConstraint("proficiency_bonus >= 0", name="ck_challenge_ratings_proficiency_bonus"),
+        CheckConstraint("numeric_value >= 0", name="ck_challenge_ratings_numeric_value"),
     )
 
     numeric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False, unique=True)

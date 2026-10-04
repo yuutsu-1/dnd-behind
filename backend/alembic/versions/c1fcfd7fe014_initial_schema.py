@@ -398,6 +398,7 @@ def upgrade() -> None:
     sa.Column('is_homebrew', sa.Boolean(), nullable=False),
     sa.Column('created_by', sa.UUID(), nullable=True),
     sa.CheckConstraint('proficiency_bonus >= 0', name='ck_challenge_ratings_proficiency_bonus'),
+    sa.CheckConstraint('numeric_value >= 0', name='ck_challenge_ratings_numeric_value'),
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
     sa.PrimaryKeyConstraint('code'),
     sa.UniqueConstraint('numeric_value')

@@ -241,3 +241,55 @@ class TestOut:
 
     def test_condition_out_has_implies(self):
         assert "implies" in s.ConditionOut.model_fields
+
+
+INT32_MAX = 2_147_483_647
+
+
+class TestInt32Bounds:
+    """Integer columns are INTEGER (int32) in Postgres: larger values must be a 422,
+    not an OverflowError/DBAPIError (500) at insert time."""
+
+    @pytest.mark.parametrize("schema,payload,field", [
+        (s.CharacterLevelCreate, dict(level=2, min_xp=0, proficiency_bonus=2), "level"),
+        (s.CharacterLevelCreate, dict(level=2, min_xp=0, proficiency_bonus=2), "min_xp"),
+        (s.CharacterLevelCreate, dict(level=2, min_xp=0, proficiency_bonus=2), "proficiency_bonus"),
+        (s.PointBuyCostCreate, dict(score=16, cost=11), "score"),
+        (s.PointBuyCostCreate, dict(score=16, cost=11), "cost"),
+        (s.SizeCreate, dict(code="titanic", name="Titanic", hit_die=20, carry_multiplier=240, sort_order=7), "hit_die"),
+        (s.SizeCreate, dict(code="titanic", name="Titanic", hit_die=20, carry_multiplier=240, sort_order=7), "sort_order"),
+        (s.ChallengeRatingCreate, dict(code="31", name="31", numeric_value=31, proficiency_bonus=9), "proficiency_bonus"),
+    ])
+    def test_create_rejects_values_above_int32(self, schema, payload, field):
+        schema(**{**payload, field: INT32_MAX})
+        with pytest.raises(ValidationError):
+            schema(**{**payload, field: INT32_MAX + 1})
+
+    @pytest.mark.parametrize("schema,field", [
+        (s.CharacterLevelUpdate, "min_xp"),
+        (s.CharacterLevelUpdate, "proficiency_bonus"),
+        (s.PointBuyCostUpdate, "cost"),
+        (s.SizeUpdate, "hit_die"),
+        (s.SizeUpdate, "sort_order"),
+        (s.ChallengeRatingUpdate, "proficiency_bonus"),
+    ])
+    def test_update_rejects_values_above_int32(self, schema, field):
+        with pytest.raises(ValidationError):
+            schema(**{field: INT32_MAX + 1})
+
+    def test_negative_sort_order_and_score_below_int32(self):
+        with pytest.raises(ValidationError):
+            s.SizeUpdate(sort_order=-INT32_MAX - 2)
+        with pytest.raises(ValidationError):
+            s.PointBuyCostCreate(score=-INT32_MAX - 2, cost=0)
+
+
+class TestChallengeRatingNumericValue:
+    def test_negative_numeric_value_rejected(self):
+        with pytest.raises(ValidationError):
+            s.ChallengeRatingCreate(code="minus_1", name="-1", numeric_value=-1, proficiency_bonus=2)
+        with pytest.raises(ValidationError):
+            s.ChallengeRatingUpdate(numeric_value=-1)
+
+    def test_zero_allowed(self):
+        assert s.ChallengeRatingUpdate(numeric_value=0).numeric_value == 0

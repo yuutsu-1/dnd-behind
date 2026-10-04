@@ -17,7 +17,12 @@ CODE_PATTERN = r"^[a-z0-9]+(_[a-z0-9]+)*$"
 
 Code = Annotated[str, StringConstraints(pattern=CODE_PATTERN, max_length=50)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-NonNegativeInt = Annotated[int, Field(ge=0)]
+# INTEGER columns are int32 in Postgres: bound every int so overflow is a 422, not a 500.
+INT32_MIN, INT32_MAX = -(2**31), 2**31 - 1
+Int32 = Annotated[int, Field(ge=INT32_MIN, le=INT32_MAX)]
+NonNegativeInt = Annotated[int, Field(ge=0, le=INT32_MAX)]
+PositiveInt = Annotated[int, Field(gt=0, le=INT32_MAX)]
+NonNegativeDecimal = Annotated[Decimal, Field(ge=0)]
 # NUMERIC columns come back from the DB as Decimal; expose them as JSON numbers.
 JsonNumber = Annotated[Decimal, PlainSerializer(float, return_type=float, when_used="json")]
 
@@ -107,15 +112,15 @@ class ConditionOut(ReferenceOut):
 
 
 class SizeCreate(ReferenceCreate):
-    hit_die: int = Field(gt=0)
+    hit_die: PositiveInt
     carry_multiplier: Decimal = Field(gt=0)
-    sort_order: int
+    sort_order: Int32
 
 
 class SizeUpdate(ReferenceUpdate):
-    hit_die: int | None = Field(default=None, gt=0)
+    hit_die: PositiveInt | None = None
     carry_multiplier: Decimal | None = Field(default=None, gt=0)
-    sort_order: int | None = None
+    sort_order: Int32 | None = None
 
 
 class SizeOut(ReferenceOut):
@@ -140,12 +145,12 @@ class LanguageOut(ReferenceOut):
 
 
 class ChallengeRatingCreate(ReferenceCreate):
-    numeric_value: Decimal
+    numeric_value: NonNegativeDecimal
     proficiency_bonus: NonNegativeInt
 
 
 class ChallengeRatingUpdate(ReferenceUpdate):
-    numeric_value: Decimal | None = None
+    numeric_value: NonNegativeDecimal | None = None
     proficiency_bonus: NonNegativeInt | None = None
 
 
@@ -157,7 +162,7 @@ class ChallengeRatingOut(ReferenceOut):
 # --- numeric-keyed resources (no code/name/description) ----------------------
 
 class CharacterLevelCreate(_Write):
-    level: int = Field(ge=1)
+    level: Annotated[int, Field(ge=1, le=INT32_MAX)]
     min_xp: NonNegativeInt
     proficiency_bonus: NonNegativeInt
     campaign_ids: CampaignIds = None
@@ -181,7 +186,7 @@ class CharacterLevelOut(BaseModel):
 
 
 class PointBuyCostCreate(_Write):
-    score: int
+    score: Int32
     cost: NonNegativeInt
     campaign_ids: CampaignIds = None
 

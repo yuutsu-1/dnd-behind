@@ -9,9 +9,9 @@
   the session is rolled back on failure).
 """
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -47,8 +47,11 @@ class Resource:
         return ref_service.key_column(self.model).key
 
     @property
-    def key_type(self) -> type:
-        return int if self.key != "code" else str
+    def key_type(self) -> Any:
+        if self.key == "code":
+            return str
+        # Numeric keys are INTEGER (int32): out-of-range path values are a 422, not a 500.
+        return Annotated[int, Path(ge=schemas.INT32_MIN, le=schemas.INT32_MAX)]
 
     @property
     def searchable(self) -> bool:
@@ -201,10 +204,15 @@ async def _replace_implies(db: AsyncSession, code: str, implies: list[str]) -> N
 
 # --- handlers ----------------------------------------------------------------------
 
+def _escape_like(term: str) -> str:
+    """Make LIKE wildcards in a search term literal (`_` and `%` match themselves)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def list_entries(res: Resource, db: AsyncSession, user: User | None, search: str | None) -> list[BaseModel]:
     query = select(res.model).where(ref_service.visible_filter(res.model, user))
     if search and res.searchable:
-        query = query.where(res.model.name.ilike(f"%{search}%"))
+        query = query.where(res.model.name.ilike(f"%{_escape_like(search)}%", escape="\\"))
     query = query.order_by(*(getattr(res.model, column) for column in res.order_by))
     rows = (await db.execute(query)).scalars().all()
     return await _to_outs(db, res, rows, user)
@@ -240,6 +248,10 @@ async def create_entry(res: Resource, db: AsyncSession, user: User, data: BaseMo
     except HTTPException:
         await db.rollback()
         raise
+    except IntegrityError:
+        # A concurrent request won the race past the pre-insert uniqueness checks.
+        await db.rollback()
+        raise _conflict("Entry conflicts with an existing one")
     await db.refresh(obj)
     return await _to_out(db, res, obj, user)
 
@@ -267,6 +279,9 @@ async def update_entry(res: Resource, db: AsyncSession, user: User, key, data: B
     except HTTPException:
         await db.rollback()
         raise
+    except IntegrityError:
+        await db.rollback()
+        raise _conflict("Entry conflicts with an existing one")
     await db.refresh(obj)
     return await _to_out(db, res, obj, user)
 

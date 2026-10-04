@@ -1,5 +1,7 @@
 # Relatório de gaps — descobertos ao tentar criar um personagem real (Sir Alcino)
 
+> Atualização 2026-10-04: o mapeamento de cada gap para a fase que o resolve está em `2026-10-04-redesenho-modelo-srd.md`, seção "Mapa: gaps antigos → fase que resolve".
+
 ## Contexto
 Tentativa de criar um personagem real via API/serviços (Guerreiro 3 / Campeão, Humano, Nobre) para validar o sistema ponta a ponta. O banco estava completamente vazio (nenhuma classe/subclasse/espécie/antecedente/talento/item/perícia/usuário cadastrado), o que já era esperado. Durante a tentativa, surgiram gaps de modelagem que impedem representar corretamente o personagem sem inventar dados ou forçar tudo em campos genéricos. Parado antes de implementar qualquer coisa — este documento é o inventário desses gaps, para virar entrada de um ciclo de refinamento/planejamento futuro.
 

@@ -1,6 +1,13 @@
 # Teste de criação de personagem (Guerreiro) e modelagem de features
 
-Data: 2026-10-03 — status: **em andamento / ideia de features em amadurecimento**
+Data: 2026-10-03 — status: **pausado; virou o redesenho em `2026-10-04-redesenho-modelo-srd.md`**
+
+> Atualização 2026-10-04:
+> - O bug de lazy load foi corrigido (commit 61073ab).
+> - O banco local foi recriado e Guerreiro, itens e moedas foram recadastrados.
+> - O antecedente Nobre não está no SRD.
+> - A espécie Humano não pode ser cadastrada: `POST /species` dá 500 e o modelo não comporta o tamanho à escolha nem os traços.
+> - A ideia de `feature_effects` abaixo foi incorporada à fase 4 do redesenho.
 
 ## Objetivo do teste
 

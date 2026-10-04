@@ -1,10 +1,3 @@
-"""SRD 2024 reference tables ("lookups") in the common `code` pattern.
-
-Every table here is seeded with the SRD by the initial migration (`source="srd"`,
-`is_homebrew=False`, `created_by=NULL`) and accepts homebrew rows created through
-`/api/compendium/<resource>`. A homebrew row is visible to its author and, through
-`campaign_homebrew_rules`, to the members of the campaigns it is shared with.
-"""
 import uuid
 from decimal import Decimal
 

@@ -24,7 +24,7 @@ app.include_router(campaigns.router, prefix="/api")
 app.include_router(characters.router, prefix="/api")
 app.include_router(compendium.router, prefix="/api")
 app.include_router(reference.router, prefix="/api")
-app.include_router(ws.router)  # WebSocket has no /api prefix — avoids proxy issues
+app.include_router(ws.router)
 
 
 @app.get("/health")

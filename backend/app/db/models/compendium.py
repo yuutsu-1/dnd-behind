@@ -86,8 +86,6 @@ background_skills = Table(
     Column("skill_code", String(CODE_LENGTH), _code_fk("skills.code"), primary_key=True),
 )
 
-# Tool proficiency options offered by a background: one entry = fixed
-# proficiency; several = the character picks one of them.
 background_tool_proficiencies = Table(
     "background_tool_proficiencies",
     Base.metadata,

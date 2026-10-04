@@ -15,6 +15,7 @@ from app.enums import AbilityScore
 from app.schemas.compendium import (
     BackgroundCreate,
     BackgroundInitialEquipmentCreate,
+    BackgroundOut,
     BackgroundUpdate,
     SkillCreate,
 )
@@ -83,6 +84,26 @@ class TestCreateBackgroundNobleCase:
         obj = await create_background(data, current_user=creator, db=db_session)
 
         assert {t.name for t in obj.tool_proficiencies} == set(options)
+
+    async def test_response_serializes_when_items_not_in_session(self, db_session):
+        # Regression: lazy `item` load during response serialization raised
+        # MissingGreenlet when the ItemDefinition was not in the identity map.
+        creator = await seed_user(db_session)
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session, name=f"Item {n}") for n in range(3)]
+        item_ids = [i.id for i in items]
+        for i in items:
+            db_session.expunge(i)
+        del items, i
+
+        data = BackgroundCreate(**_noble_kwargs(feat.id, item_ids))
+        obj = await create_background(data, current_user=creator, db=db_session)
+        out = BackgroundOut.model_validate(obj)
+        assert {e.item_name for e in out.initial_equipment} == {"Item 0", "Item 1", "Item 2"}
+
+        db_session.expunge_all()
+        fetched = await get_background(obj.id, db=db_session)
+        assert {e.item_name for e in BackgroundOut.model_validate(fetched).initial_equipment} == {"Item 0", "Item 1", "Item 2"}
 
 
 class TestCreateBackgroundValidation:

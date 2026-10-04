@@ -316,7 +316,7 @@ class ClassInitialEquipment(Base):
     quantity: Mapped[int]       = mapped_column(Integer, nullable=False, default=1)
 
     class_def: Mapped["ClassDefinition"] = relationship(back_populates="initial_equipment")
-    item: Mapped["ItemDefinition"]       = relationship()
+    item: Mapped["ItemDefinition"]       = relationship(lazy="selectin")
 
     @property
     def item_name(self) -> str | None:
@@ -334,7 +334,7 @@ class BackgroundInitialEquipment(Base):
     quantity: Mapped[int]            = mapped_column(Integer, nullable=False, default=1)
 
     background: Mapped["BackgroundDefinition"] = relationship(back_populates="initial_equipment")
-    item: Mapped["ItemDefinition"]             = relationship()
+    item: Mapped["ItemDefinition"]             = relationship(lazy="selectin")
 
     @property
     def item_name(self) -> str | None:

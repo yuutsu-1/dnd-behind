@@ -5,10 +5,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.compendium import create_class, create_skill, list_skills
+from app.api.compendium import create_class, create_skill, list_classes, list_skills
 from app.db.models.compendium import ClassDefinition, SkillDefinition
 from app.enums import AbilityScore
-from app.schemas.compendium import ClassCreate, ClassInitialEquipmentCreate, SkillCreate
+from app.schemas.compendium import ClassCreate, ClassInitialEquipmentCreate, ClassOut, SkillCreate
 from tests.integration.conftest import seed_item, seed_skill, seed_user
 
 
@@ -151,6 +151,29 @@ class TestClassInitialEquipment:
         assert by_option["A"].quantity == 2
         assert by_option["B"].item_name == "Shortsword"
         assert by_option["B"].quantity == 1
+
+    async def test_response_serializes_when_item_not_in_session(self, db_session):
+        # Regression: in production the ItemDefinition is not held in the
+        # session's identity map, so a lazy `item` load during response
+        # serialization raised MissingGreenlet.
+        creator = await seed_user(db_session)
+        dagger = await seed_item(db_session, name="Dagger")
+        dagger_id = dagger.id
+        db_session.expunge(dagger)
+        del dagger
+        data = ClassCreate(
+            **_minimal_class_kwargs(
+                initial_equipment=[ClassInitialEquipmentCreate(item_id=dagger_id, option="A", quantity=2)],
+            )
+        )
+
+        obj = await create_class(data, current_user=creator, db=db_session)
+        out = ClassOut.model_validate(obj)
+        assert out.initial_equipment[0].item_name == "Dagger"
+
+        db_session.expunge_all()
+        listed = await list_classes(db=db_session, search=data.name)
+        assert ClassOut.model_validate(listed[0]).initial_equipment[0].item_name == "Dagger"
 
     async def test_referencing_missing_item_is_rejected(self, db_session):
         creator = await seed_user(db_session)

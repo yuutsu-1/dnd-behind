@@ -1,5 +1,5 @@
 """Reference resources with special rules: sizes, challenge-ratings, character-levels,
-point-buy-costs, skills and conditions; plus the public GET of all 23 resources."""
+point-buy-costs, skills, conditions and tool-types; plus the public GET of all 24 resources."""
 import pytest
 from sqlalchemy import func, select
 
@@ -10,6 +10,8 @@ from app.db.models.reference import (
     Condition,
     ConditionImplication,
     Skill,
+    ToolCategory,
+    ToolType,
 )
 from tests.integration.conftest import (
     auth_headers,
@@ -37,7 +39,7 @@ async def people(db_session):
     return dict(a=a, p=p, b=b, c=c)
 
 
-class TestPublicGetAll23:
+class TestPublicGetAll24:
     EXPECTED_KEYS = {
         "sizes": ["tiny", "small", "medium", "large", "huge", "gargantuan"],
         "character-levels": list(range(1, 21)),
@@ -45,8 +47,12 @@ class TestPublicGetAll23:
         "challenge-ratings": CR_ORDER,
     }
 
-    def test_there_are_23_resources(self):
-        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 2 == 23  # + skills, conditions
+    def test_there_are_24_resources(self):
+        from app.api.reference import RESOURCES
+
+        # + skills, conditions, tool-types
+        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 3 == 24 == len(RESOURCES)
+        assert "tool-proficiencies" not in {r.slug for r in RESOURCES}
 
     @pytest.mark.parametrize("slug,key", [
         ("sizes", "code"), ("character-levels", "level"), ("point-buy-costs", "score"),
@@ -59,7 +65,7 @@ class TestPublicGetAll23:
         assert [r[key] for r in rows] == self.EXPECTED_KEYS[slug]
         assert all(r["source"] == "srd" and r["is_homebrew"] is False and r["campaign_ids"] is None for r in rows)
 
-    @pytest.mark.parametrize("slug,count", [("skills", 18), ("conditions", 15)])
+    @pytest.mark.parametrize("slug,count", [("skills", 18), ("conditions", 15), ("tool-types", 37)])
     async def test_ordered_by_name(self, api_client, slug, count):
         rows = (await api_client.get(f"{API}/{slug}")).json()
         assert len(rows) == count
@@ -257,6 +263,95 @@ class TestSkills:
         good = await api_client.patch(f"{API}/skills/psionics", json={"ability_code": "wis"}, headers=headers)
         assert good.status_code == 200
         assert good.json()["ability_code"] == "wis"
+
+
+class TestToolTypes:
+    async def test_public_list_is_srd_only_and_deterministic(self, api_client, db_session, people):
+        await seed_reference(db_session, ToolType, author=people["a"], code="harp", name="Harp", ability_code="cha")
+        await db_session.commit()
+        first = (await api_client.get(f"{API}/tool-types")).json()
+        second = (await api_client.get(f"{API}/tool-types")).json()
+        assert first == second
+        assert len(first) == 37
+        assert all(r["source"] == "srd" for r in first)
+        lute = next(r for r in first if r["code"] == "lute")
+        assert (lute["category_code"], lute["ability_code"]) == ("musical_instrument", "cha")
+        thieves = (await api_client.get(f"{API}/tool-types/thieves_tools")).json()
+        assert (thieves["category_code"], thieves["ability_code"]) == (None, "dex")
+
+    async def test_item_types_public_list(self, api_client):
+        rows = (await api_client.get(f"{API}/item-types")).json()
+        assert {r["code"] for r in rows} == {
+            "weapon", "armor", "tool", "ammunition", "adventuring_gear", "pack", "currency",
+        }
+
+    async def test_create(self, api_client, people):
+        response = await api_client.post(
+            f"{API}/tool-types",
+            json={"code": "harp", "name": "Harp", "category_code": "musical_instrument", "ability_code": "cha"},
+            headers=auth_headers(people["a"]),
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert (body["category_code"], body["ability_code"], body["is_homebrew"]) == ("musical_instrument", "cha", True)
+
+    async def test_create_without_category(self, api_client, people):
+        response = await api_client.post(
+            f"{API}/tool-types", json={"code": "lockpicks", "name": "Lockpicks", "ability_code": "dex"},
+            headers=auth_headers(people["a"]),
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["category_code"] is None
+
+    async def test_missing_ability_is_422(self, api_client, people):
+        response = await api_client.post(
+            f"{API}/tool-types", json={"code": "harp", "name": "Harp"}, headers=auth_headers(people["a"]),
+        )
+        assert response.status_code == 422
+
+    async def test_unknown_ability_is_400(self, api_client, db_session, people):
+        response = await api_client.post(
+            f"{API}/tool-types", json={"code": "harp", "name": "Harp", "ability_code": "luck"},
+            headers=auth_headers(people["a"]),
+        )
+        assert response.status_code == 400
+        assert await db_session.get(ToolType, "harp") is None
+
+    async def test_invisible_homebrew_category_is_400(self, api_client, db_session, people):
+        await seed_reference(db_session, ToolCategory, author=people["b"], code="weird_kits", name="Weird Kits")
+        await db_session.commit()
+        response = await api_client.post(
+            f"{API}/tool-types",
+            json={"code": "harp", "name": "Harp", "category_code": "weird_kits", "ability_code": "cha"},
+            headers=auth_headers(people["a"]),
+        )
+        assert response.status_code == 400
+        assert await db_session.get(ToolType, "harp") is None
+
+    async def test_patch(self, api_client, db_session, people):
+        await seed_reference(
+            db_session, ToolType, author=people["a"], code="harp", name="Harp",
+            category_code="musical_instrument", ability_code="cha",
+        )
+        await db_session.commit()
+        headers = auth_headers(people["a"])
+        assert (await api_client.patch(
+            f"{API}/tool-types/harp", json={"ability_code": None}, headers=headers,
+        )).status_code == 422
+        assert (await api_client.patch(
+            f"{API}/tool-types/harp", json={"category_code": "nope"}, headers=headers,
+        )).status_code == 400
+        cleared = await api_client.patch(f"{API}/tool-types/harp", json={"category_code": None}, headers=headers)
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["category_code"] is None
+
+    async def test_invalid_token_is_401(self, api_client):
+        for slug in ("tool-types", "item-types"):
+            response = await api_client.get(f"{API}/{slug}", headers={"Authorization": "Bearer not-a-jwt"})
+            assert response.status_code == 401
+
+    async def test_tool_proficiencies_route_is_gone(self, api_client):
+        assert (await api_client.get(f"{API}/tool-proficiencies")).status_code == 404
 
 
 class TestConditions:

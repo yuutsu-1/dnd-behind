@@ -1,11 +1,11 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.deps import CurrentUser, DB
+from app.core.deps import DB, CurrentUser, OptionalUser
 from app.db.models.compendium import (
     BackgroundDefinition,
     BackgroundInitialEquipment,
@@ -19,25 +19,21 @@ from app.db.models.compendium import (
     SubclassDefinition,
     spell_class_lists,
 )
-from app.db.models.reference import (
-    Ability,
-    ArmorCategory,
-    Size,
-    Skill,
-    ToolProficiencyOption,
-    WeaponCategory,
-)
+from app.db.models.reference import Ability, Size, Skill
 from app.db.models.user import User
 from app.schemas.compendium import (
     BackgroundCreate, BackgroundOut, BackgroundUpdate,
     ClassCreate, ClassOut,
     FeatCreate, FeatOut,
     FeatureGrantCreate, FeatureGrantOut,
-    ItemCreate, ItemOut,
     SpellCreate, SpellOut,
     SpeciesCreate, SpeciesOut,
     SubclassCreate, SubclassOut,
 )
+from app.schemas.items import ItemCreate, ItemOut, ItemUpdate
+from app.schemas.proficiency_grants import ProficiencyGrantOut
+from app.services import items as item_service
+from app.services import proficiency_grants as grant_service
 from app.services.reference import resolve_codes
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
@@ -101,14 +97,12 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
     # Everything is validated before anything is written; any error rolls back.
     try:
         primary_ability = await _resolve(db, Ability, data.primary_ability, current_user, "ability score")
-        saving_throws = await _resolve(db, Ability, data.saving_throw_proficiencies, current_user, "ability score")
-        armor = await _resolve(db, ArmorCategory, data.armor_proficiencies, current_user, "armor category")
-        weapons = await _resolve(db, WeaponCategory, data.weapon_proficiencies, current_user, "weapon category")
-        tools = await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
         skills = await _resolve(db, Skill, data.skills, current_user, "skill")
         if data.spell_ability is not None:
             await _resolve(db, Ability, [data.spell_ability], current_user, "ability score")
         await _validate_items_exist(db, data.initial_equipment)
+        # May create grants: they are discarded by the rollback if anything fails later.
+        grants = await grant_service.resolve_grants(db, data.proficiency_grants, current_user)
 
         obj = ClassDefinition(
             name=data.name,
@@ -121,10 +115,7 @@ async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
             is_homebrew=True,
             created_by=current_user.id,
             primary_ability=primary_ability,
-            saving_throw_proficiencies=saving_throws,
-            armor_proficiencies=armor,
-            weapon_proficiencies=weapons,
-            tool_proficiencies=tools,
+            proficiency_grants=grants,
             skills=skills,
             initial_equipment=[
                 ClassInitialEquipment(item_id=e.item_id, option=e.option, quantity=e.quantity)
@@ -196,8 +187,7 @@ async def create_background(data: BackgroundCreate, current_user: CurrentUser, d
         await _validate_feat_exists(db, data.feat_id)
         await _validate_items_exist(db, data.initial_equipment)
         ability_scores = await _resolve(db, Ability, data.ability_scores, current_user, "ability score")
-        skills = await _resolve(db, Skill, data.skills, current_user, "skill")
-        tools = await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
+        grants = await grant_service.resolve_grants(db, data.proficiency_grants, current_user)
 
         obj = BackgroundDefinition(
             name=data.name,
@@ -206,8 +196,7 @@ async def create_background(data: BackgroundCreate, current_user: CurrentUser, d
             is_homebrew=True,
             created_by=current_user.id,
             ability_scores=ability_scores,
-            skills=skills,
-            tool_proficiencies=tools,
+            proficiency_grants=grants,
             initial_equipment=[
                 BackgroundInitialEquipment(item_id=e.item_id, option=e.option, quantity=e.quantity)
                 for e in data.initial_equipment
@@ -239,10 +228,9 @@ async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, cu
             await _resolve(db, Ability, data.ability_scores, current_user, "ability score")
             if data.ability_scores is not None else None
         )
-        skills = await _resolve(db, Skill, data.skills, current_user, "skill") if data.skills is not None else None
-        tools = (
-            await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
-            if data.tool_proficiencies is not None else None
+        grants = (
+            await grant_service.resolve_grants(db, data.proficiency_grants, current_user)
+            if data.proficiency_grants is not None else None
         )
 
         if data.feat_id is not None:
@@ -253,10 +241,9 @@ async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, cu
             obj.description = data.description
         if ability_scores is not None:
             obj.ability_scores = ability_scores
-        if tools is not None:
-            obj.tool_proficiencies = tools
-        if skills is not None:
-            obj.skills = skills
+        if grants is not None:
+            # Replaces the whole set; grants left without owner stay in the database.
+            obj.proficiency_grants = grants
         if data.initial_equipment is not None:
             for entry in list(obj.initial_equipment):
                 await db.delete(entry)
@@ -363,40 +350,64 @@ async def create_spell(data: SpellCreate, current_user: CurrentUser, db: DB):
     await db.refresh(obj)
     return obj
 
+# Items are global (every user sees every item); `user` is optional: no token ->
+# anonymous, invalid token -> 401. Filters take codes; an unknown code matches nothing.
 @router.get("/items", response_model=list[ItemOut])
 async def list_items(
     db: DB,
+    user: OptionalUser,
     item_type: str | None = Query(default=None),
-    rarity: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    weapon_category: str | None = Query(default=None),
+    armor_category: str | None = Query(default=None),
+    tool_category: str | None = Query(default=None),
+    tool_type: str | None = Query(default=None),
 ):
-    q = select(ItemDefinition)
-    if item_type:
-        q = q.where(ItemDefinition.item_type == item_type)
-    if rarity:
-        q = q.where(ItemDefinition.rarity == rarity)
-    if search:
-        q = q.where(ItemDefinition.name.ilike(f"%{search}%"))
-    result = await db.execute(q)
-    return list(result.scalars().all())
+    return await item_service.list_items(
+        db, item_type=item_type, search=search, weapon_category=weapon_category,
+        armor_category=armor_category, tool_category=tool_category, tool_type=tool_type,
+    )
 
 
 @router.get("/items/{item_id}", response_model=ItemOut)
-async def get_item(item_id: uuid.UUID, db: DB):
-    result = await db.execute(select(ItemDefinition).where(ItemDefinition.id == item_id))
-    obj = result.scalar_one_or_none()
-    if not obj:
+async def get_item(item_id: uuid.UUID, db: DB, user: OptionalUser):
+    obj = await item_service.get_item(db, item_id)
+    if obj is None:
         raise HTTPException(status_code=404, detail="Item not found")
     return obj
 
 
 @router.post("/items", response_model=ItemOut, status_code=201)
 async def create_item(data: ItemCreate, current_user: CurrentUser, db: DB):
-    obj = ItemDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
-    db.add(obj)
-    await db.commit()
-    await db.refresh(obj)
-    return obj
+    return await item_service.create_item(db, data, current_user)
+
+
+@router.patch("/items/{item_id}", response_model=ItemOut)
+async def update_item(item_id: uuid.UUID, data: ItemUpdate, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew (SRD/other author -> 403, missing -> 404)."""
+    return await item_service.update_item(db, item_id, data, current_user)
+
+
+@router.delete("/items/{item_id}", status_code=204)
+async def delete_item(item_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; 409 while the item is referenced."""
+    await item_service.delete_item(db, item_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+# Grants are global (shared by every class/background) and created only through them.
+# `user` is optional: no token -> anonymous; invalid token -> 401.
+@router.get("/proficiency-grants", response_model=list[ProficiencyGrantOut])
+async def list_proficiency_grants(db: DB, user: OptionalUser):
+    return await grant_service.list_grants(db)
+
+
+@router.get("/proficiency-grants/{grant_id}", response_model=ProficiencyGrantOut)
+async def get_proficiency_grant(grant_id: uuid.UUID, db: DB, user: OptionalUser):
+    grant = await grant_service.get_grant(db, grant_id)
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Proficiency grant not found")
+    return grant
+
 
 @router.get("/feature-grants", response_model=list[FeatureGrantOut])
 async def list_feature_grants(

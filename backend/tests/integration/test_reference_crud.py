@@ -36,7 +36,7 @@ SIMPLE_RESOURCES = {
     "recharge-types": 5,
     "action-types": 3,
     "feat-categories": 4,
-    "tool-proficiencies": 25,
+    "item-types": 7,
 }
 
 

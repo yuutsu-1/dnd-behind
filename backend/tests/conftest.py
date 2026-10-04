@@ -1,6 +1,7 @@
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test_db")
@@ -263,15 +264,10 @@ def make_item(**overrides) -> ItemDefinition:
     defaults = dict(
         id=uuid.uuid4(),
         name="Longsword",
-        item_type="weapon",
-        subtype=None,
-        rarity="common",
-        requires_attunement=False,
-        attunement_prerequisite=None,
-        weight=3.0,
-        cost_gp=15.0,
+        item_type_code="weapon",
+        weight_lb=Decimal("3"),
+        cost_gp=Decimal("15"),
         description=None,
-        properties={},
         source="srd",
         is_homebrew=False,
         created_by=None,

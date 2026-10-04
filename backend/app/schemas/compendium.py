@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.proficiency_grants import GrantDescriptors, ProficiencyGrantDescriptor, ProficiencyGrantOut
+
 
 class FeatureGrantOut(BaseModel):
     model_config = {"from_attributes": True}
@@ -98,11 +100,10 @@ class ClassOut(BaseModel):
     hit_die: int
     # Codes of `ability_scores`.
     primary_ability: list[str]
+    # Every grant is fixed, except `tool_category` ("choose one tool of the category").
+    proficiency_grants: list[ProficiencyGrantOut]
+    # Read-only: codes of the `saving_throw` grants, sorted.
     saving_throw_proficiencies: list[str]
-    # Codes of `armor_categories`, `weapon_categories` and `tool_proficiency_options`.
-    armor_proficiencies: list[str]
-    weapon_proficiencies: list[str]
-    tool_proficiencies: list[str]
     skill_choices: int
     skills: list[SkillOut]
     initial_equipment: list[ClassInitialEquipmentOut]
@@ -112,11 +113,7 @@ class ClassOut(BaseModel):
     source: str
     is_homebrew: bool
 
-    @field_validator(
-        "primary_ability", "saving_throw_proficiencies",
-        "armor_proficiencies", "weapon_proficiencies", "tool_proficiencies",
-        mode="before",
-    )
+    @field_validator("primary_ability", mode="before")
     @classmethod
     def _codes(cls, v: list) -> list:
         return _pluck_codes(v)
@@ -124,16 +121,15 @@ class ClassOut(BaseModel):
 
 class ClassCreate(BaseModel):
     """Every reference field takes codes that must exist and be visible to the caller
-    (400 otherwise; same message whether the code is unknown or invisible)."""
+    (400 otherwise; same message whether the code is unknown or invisible).
+    `proficiency_grants` takes descriptors of any kind (saving throws included); the
+    server reuses the existing grant for each target or creates it."""
 
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
     hit_die: int
     primary_ability: list[str]
-    saving_throw_proficiencies: list[str]
-    armor_proficiencies: list[str] = Field(default_factory=list)
-    weapon_proficiencies: list[str] = Field(default_factory=list)
-    tool_proficiencies: list[str] = Field(default_factory=list)
+    proficiency_grants: GrantDescriptors = Field(default_factory=list)
     skill_choices: int = 2
     skills: list[str] = Field(default_factory=list)
     initial_equipment: list[ClassInitialEquipmentCreate] = Field(default_factory=list)
@@ -185,20 +181,20 @@ def _validate_ability_scores_cardinality(v: list) -> list:
     return v
 
 
-def _validate_skills_cardinality(v: list) -> list:
-    if len(v) != 2:
-        raise ValueError("skills must have exactly 2 entries")
-    if len(set(v)) != len(v):
-        raise ValueError("skills must not contain duplicates")
-    return v
+BACKGROUND_GRANT_KINDS = frozenset({"skill", "tool", "tool_category"})
 
 
-def _validate_tool_proficiencies(v: list) -> list:
-    if not v:
-        raise ValueError("tool_proficiencies must have at least 1 entry")
-    if len(set(v)) != len(v):
-        raise ValueError("tool_proficiencies must not contain duplicates")
-    return v
+def _validate_background_grants(grants: list[ProficiencyGrantDescriptor]) -> list[ProficiencyGrantDescriptor]:
+    """Exactly 2 (distinct) skills, at least one tool or tool category, nothing else.
+    Duplicates are already rejected by `GrantDescriptors`."""
+    kinds = [grant.kind for grant in grants]
+    if set(kinds) - BACKGROUND_GRANT_KINDS:
+        raise ValueError("a background only grants skills, tools and tool categories")
+    if kinds.count("skill") != 2:
+        raise ValueError("a background grants exactly 2 skills")
+    if not {"tool", "tool_category"} & set(kinds):
+        raise ValueError("a background grants at least 1 tool or tool category")
+    return grants
 
 
 class BackgroundOut(BaseModel):
@@ -211,29 +207,29 @@ class BackgroundOut(BaseModel):
     ability_scores: list[str]
     feat_id: uuid.UUID
     feat_name: str
+    # Every grant is fixed; "choose one tool of the category" is a `tool_category` grant.
+    proficiency_grants: list[ProficiencyGrantOut]
+    # Read-only: the skills of the `skill` grants, sorted by name.
     skills: list[SkillOut]
-    # Codes of `tool_proficiency_options`. One entry = fixed proficiency; several =
-    # the character picks one.
-    tool_proficiencies: list[str]
     initial_equipment: list[BackgroundInitialEquipmentOut]
     source: str
     is_homebrew: bool
 
-    @field_validator("ability_scores", "tool_proficiencies", mode="before")
+    @field_validator("ability_scores", mode="before")
     @classmethod
     def _codes(cls, v: list) -> list:
         return _pluck_codes(v)
 
 
 class BackgroundCreate(BaseModel):
-    """Reference fields take codes that must exist and be visible to the caller (400)."""
+    """Reference fields take codes that must exist and be visible to the caller (400).
+    `proficiency_grants`: exactly 2 skills, at least 1 tool or tool category, no other kind."""
 
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
     ability_scores: list[str]
     feat_id: uuid.UUID
-    skills: list[str]
-    tool_proficiencies: list[str]
+    proficiency_grants: GrantDescriptors
     initial_equipment: list[BackgroundInitialEquipmentCreate] = Field(default_factory=list)
 
     @field_validator("ability_scores")
@@ -241,24 +237,20 @@ class BackgroundCreate(BaseModel):
     def _check_ability_scores(cls, v: list) -> list:
         return _validate_ability_scores_cardinality(v)
 
-    @field_validator("skills")
+    @field_validator("proficiency_grants")
     @classmethod
-    def _check_skills(cls, v: list) -> list:
-        return _validate_skills_cardinality(v)
-
-    @field_validator("tool_proficiencies")
-    @classmethod
-    def _check_tool_proficiencies(cls, v: list) -> list:
-        return _validate_tool_proficiencies(v)
+    def _check_grants(cls, v: list) -> list:
+        return _validate_background_grants(v)
 
 
 class BackgroundUpdate(BaseModel):
+    """`proficiency_grants`, when sent, replaces the whole set (same rules as on create)."""
+
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = None
     ability_scores: list[str] | None = None
     feat_id: uuid.UUID | None = None
-    skills: list[str] | None = None
-    tool_proficiencies: list[str] | None = None
+    proficiency_grants: GrantDescriptors | None = None
     initial_equipment: list[BackgroundInitialEquipmentCreate] | None = None
 
     @field_validator("ability_scores")
@@ -268,19 +260,12 @@ class BackgroundUpdate(BaseModel):
             return v
         return _validate_ability_scores_cardinality(v)
 
-    @field_validator("skills")
+    @field_validator("proficiency_grants")
     @classmethod
-    def _check_skills(cls, v: list | None) -> list | None:
+    def _check_grants(cls, v: list | None) -> list | None:
         if v is None:
             return v
-        return _validate_skills_cardinality(v)
-
-    @field_validator("tool_proficiencies")
-    @classmethod
-    def _check_tool_proficiencies(cls, v: list | None) -> list | None:
-        if v is None:
-            return v
-        return _validate_tool_proficiencies(v)
+        return _validate_background_grants(v)
 
 
 class FeatOut(BaseModel):
@@ -347,32 +332,3 @@ class SpellCreate(BaseModel):
     # IDs of existing ClassDefinition rows to link
     class_ids: list[uuid.UUID] = Field(default_factory=list)
 
-class ItemOut(BaseModel):
-    model_config = {"from_attributes": True}
-
-    id: uuid.UUID
-    name: str
-    item_type: str
-    subtype: str | None
-    rarity: str
-    requires_attunement: bool
-    attunement_prerequisite: str | None
-    weight: float | None
-    cost_gp: float | None
-    description: str | None
-    properties: dict
-    source: str
-    is_homebrew: bool
-
-
-class ItemCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    item_type: str
-    subtype: str | None = None
-    rarity: str = "common"
-    requires_attunement: bool = False
-    attunement_prerequisite: str | None = None
-    weight: float | None = None
-    cost_gp: float | None = None
-    description: str | None = None
-    properties: dict = Field(default_factory=dict)

@@ -6,11 +6,20 @@ from sqlalchemy import func, select
 from app.db.models.compendium import class_primary_abilities
 from app.db.models.reference import (
     Ability,
+    ArmorCategory,
     CampaignHomebrewRule,
     Condition,
     ConditionImplication,
+    DamageType,
+    ItemType,
+    Language,
     Size,
     Skill,
+    ToolCategory,
+    ToolType,
+    WeaponCategory,
+    WeaponMastery,
+    WeaponProperty,
 )
 from tests.integration.conftest import (
     auth_headers,
@@ -21,9 +30,17 @@ from tests.integration.conftest import (
     seed_character_skill,
     seed_class,
     seed_class_skill,
+    seed_armor,
+    seed_background,
+    seed_background_skill,
+    seed_class_grant,
+    seed_grant,
+    seed_item,
     seed_reference,
     seed_species,
+    seed_tool,
     seed_user,
+    seed_weapon,
 )
 
 API = "/api/compendium"
@@ -134,3 +151,141 @@ async def test_size_used_by_species_is_409(api_client, db_session, author):
     await seed_species(db_session, size_code="colossal")
     await db_session.commit()
     assert (await api_client.delete(f"{API}/sizes/colossal", headers=author["headers"])).status_code == 409
+
+
+# --- phase 2: references used by items, tool types and proficiency grants ---------------
+
+async def _delete(api_client, author, slug, code):
+    return await api_client.delete(f"{API}/{slug}/{code}", headers=author["headers"])
+
+
+async def test_weapon_mastery_used_by_a_weapon_is_409(api_client, db_session, author):
+    await seed_reference(db_session, WeaponMastery, author=author["user"], code="shove")
+    await seed_weapon(db_session, author=author["user"], mastery_code="shove")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "weapon-masteries", "shove")).status_code == 409
+    assert await _exists(db_session, WeaponMastery, "shove")
+
+
+@pytest.mark.parametrize("model,slug,weapon_column", [
+    (WeaponCategory, "weapon-categories", "category_code"),
+    (DamageType, "damage-types", "damage_type_code"),
+])
+async def test_weapon_category_and_damage_type_used_by_a_weapon_are_409(
+    api_client, db_session, author, model, slug, weapon_column
+):
+    entry = await seed_reference(db_session, model, author=author["user"])
+    await seed_weapon(db_session, author=author["user"], **{weapon_column: entry.code})
+    await db_session.commit()
+    code = entry.code
+    assert (await _delete(api_client, author, slug, code)).status_code == 409
+    assert await _exists(db_session, model, code)
+
+
+async def test_weapon_property_used_by_a_weapon_link_is_409(api_client, db_session, author):
+    await seed_reference(db_session, WeaponProperty, author=author["user"], code="spiky")
+    await seed_weapon(db_session, author=author["user"], properties=[{"property_code": "spiky"}])
+    await db_session.commit()
+    assert (await _delete(api_client, author, "weapon-properties", "spiky")).status_code == 409
+
+
+async def test_armor_category_used_by_an_armor_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ArmorCategory, author=author["user"], code="mithral")
+    await seed_armor(db_session, author=author["user"], category_code="mithral")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "armor-categories", "mithral")).status_code == 409
+
+
+async def test_item_type_used_by_an_item_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ItemType, author=author["user"], code="relic")
+    await seed_item(db_session, author=author["user"], item_type_code="relic")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "item-types", "relic")).status_code == 409
+    assert await _exists(db_session, ItemType, "relic")
+
+
+async def test_weapon_property_used_as_required_property_of_a_grant_is_409(api_client, db_session, author):
+    await seed_reference(db_session, WeaponProperty, author=author["user"], code="spiky")
+    await seed_grant(db_session, weapon_category_code="martial", required_weapon_property_code="spiky")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "weapon-properties", "spiky")).status_code == 409
+    assert await _exists(db_session, WeaponProperty, "spiky")
+
+
+async def test_skill_used_by_a_background_grant_is_409(api_client, db_session, author):
+    skill = await seed_reference(db_session, Skill, author=author["user"], code="gambling", ability_code="cha")
+    await seed_background_skill(db_session, await seed_background(db_session), skill)
+    await db_session.commit()
+    assert (await _delete(api_client, author, "skills", "gambling")).status_code == 409
+    assert await _exists(db_session, Skill, "gambling")
+
+
+async def test_language_used_by_a_grant_is_409(api_client, db_session, author):
+    await seed_reference(db_session, Language, author=author["user"], code="aquan", rarity="rare")
+    await seed_grant(db_session, language_code="aquan")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "languages", "aquan")).status_code == 409
+
+
+async def test_tool_type_used_by_a_tool_item_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ToolType, author=author["user"], code="harp", ability_code="cha")
+    await seed_tool(db_session, author=author["user"], tool_type_code="harp")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "tool-types", "harp")).status_code == 409
+    assert await _exists(db_session, ToolType, "harp")
+
+
+async def test_tool_type_used_by_a_grant_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ToolType, author=author["user"], code="harp", ability_code="cha")
+    await seed_grant(db_session, tool_type_code="harp")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "tool-types", "harp")).status_code == 409
+
+
+async def test_unused_tool_type_is_deleted(api_client, db_session, author):
+    await seed_reference(db_session, ToolType, author=author["user"], code="harp", ability_code="cha",
+                         campaigns=[author["campaign"]])
+    await db_session.commit()
+    assert (await _delete(api_client, author, "tool-types", "harp")).status_code == 204
+    assert not await _exists(db_session, ToolType, "harp")
+    assert await _shares(db_session, "tool_types", "harp") == 0
+
+
+async def test_tool_category_used_by_a_tool_type_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ToolCategory, author=author["user"], code="weird_kits")
+    await seed_reference(db_session, ToolType, author=author["user"], code="odd_kit", category_code="weird_kits")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "tool-categories", "weird_kits")).status_code == 409
+
+
+async def test_tool_category_used_by_a_grant_is_409(api_client, db_session, author):
+    await seed_reference(db_session, ToolCategory, author=author["user"], code="weird_kits")
+    await seed_grant(db_session, tool_category_code="weird_kits")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "tool-categories", "weird_kits")).status_code == 409
+
+
+async def test_ability_used_by_a_tool_type_is_409(api_client, db_session, author):
+    await seed_reference(db_session, Ability, author=author["user"], code="luck", name="Luck")
+    await seed_reference(db_session, ToolType, author=author["user"], code="dice_of_fate", ability_code="luck")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "ability-scores", "luck")).status_code == 409
+
+
+async def test_ability_used_as_saving_throw_grant_is_409(api_client, db_session, author):
+    await seed_reference(db_session, Ability, author=author["user"], code="luck", name="Luck")
+    await seed_class_grant(db_session, await seed_class(db_session), saving_throw_ability_code="luck")
+    await db_session.commit()
+    assert (await _delete(api_client, author, "ability-scores", "luck")).status_code == 409
+
+
+@pytest.mark.parametrize("model,slug,column", [
+    (WeaponCategory, "weapon-categories", "weapon_category_code"),
+    (ArmorCategory, "armor-categories", "armor_category_code"),
+])
+async def test_categories_used_by_a_grant_are_409(api_client, db_session, author, model, slug, column):
+    entry = await seed_reference(db_session, model, author=author["user"])
+    await seed_grant(db_session, **{column: entry.code})
+    await db_session.commit()
+    code = entry.code
+    assert (await _delete(api_client, author, slug, code)).status_code == 409

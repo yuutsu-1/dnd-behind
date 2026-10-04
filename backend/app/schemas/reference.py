@@ -92,6 +92,24 @@ class SkillOut(ReferenceOut):
     ability_code: str
 
 
+class ToolTypeCreate(ReferenceCreate):
+    # NULL category = one of the "Other Tools" (Thieves' Tools, Herbalism Kit, ...).
+    category_code: Code | None = None
+    ability_code: Code
+
+
+class ToolTypeUpdate(ReferenceUpdate):
+    nullable_fields: ClassVar[frozenset[str]] = ReferenceUpdate.nullable_fields | {"category_code"}
+
+    category_code: Code | None = None
+    ability_code: Code | None = None
+
+
+class ToolTypeOut(ReferenceOut):
+    category_code: str | None
+    ability_code: str
+
+
 class ConditionCreate(ReferenceCreate):
     implies: CodeList = Field(default_factory=list)
 

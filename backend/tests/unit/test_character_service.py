@@ -98,7 +98,7 @@ class TestCreateCharacter:
         campaign_id = uuid.uuid4()
         # `background_id` is now resolved (to derive the automatic background skills),
         # so the lookup must find a (skill-less) background.
-        background = BackgroundDefinition(id=uuid.uuid4(), skills=[])
+        background = BackgroundDefinition(id=uuid.uuid4(), proficiency_grants=[])
         # Every lookup returns the background (scalar) and the SRD abilities (list),
         # so both the background and the ability-code validation succeed.
         fake_db.execute.return_value = make_result(scalar=background, scalars_list=make_srd_abilities())

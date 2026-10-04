@@ -118,7 +118,7 @@ async def create_character(
             )
 
         if data.background_id is not None:
-            await _sync_background_skills(db, character, data.background_id)
+            await _sync_skills_from_background(db, character, data.background_id)
 
         for item in data.skills:
             await _build_character_skill(db, character, item.skill_code, item.source, user_id)
@@ -152,7 +152,7 @@ async def update_character(
             await _validate_ability_codes(db, ability_scores_update, requester)
 
         if new_background_id is not None and new_background_id != character.background_id:
-            await _sync_background_skills(db, character, new_background_id)
+            await _sync_skills_from_background(db, character, new_background_id)
             character.background_id = new_background_id
     except HTTPException:
         await db.rollback()
@@ -235,7 +235,7 @@ async def _build_character_skill(
     return entry
 
 
-async def _sync_background_skills(
+async def _sync_skills_from_background(
     db: AsyncSession,
     character: Character,
     new_background_id: uuid.UUID,

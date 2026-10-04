@@ -1,6 +1,7 @@
 import os
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://dnd:dndpass@localhost:5432/dnd_test"
@@ -9,7 +10,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 
 import pytest  # noqa: E402
-from sqlalchemy import event  # noqa: E402
+from sqlalchemy import event, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.db.models.campaign import Campaign, CampaignMember  # noqa: E402
@@ -27,9 +28,13 @@ from app.db.models.compendium import (  # noqa: E402
     ClassInitialEquipment,
     FeatDefinition,
     ItemDefinition,
+    ProficiencyGrant,
     SpeciesDefinition,
     SubclassDefinition,
+    background_proficiency_grants,
+    class_proficiency_grants,
 )
+from app.db.models.items import Armor, ItemContent, Tool, Weapon, WeaponPropertyLink  # noqa: E402
 from app.db.models.reference import CampaignHomebrewRule, Skill  # noqa: E402
 from app.db.models.user import User  # noqa: E402
 
@@ -266,27 +271,87 @@ async def seed_subclass(session: AsyncSession, class_def: ClassDefinition, **ove
     return obj
 
 
-async def seed_item(session: AsyncSession, **overrides) -> ItemDefinition:
+async def seed_item(session: AsyncSession, author: User | None = None, **overrides) -> ItemDefinition:
+    """A base item with no sub-row (default type `adventuring_gear`, which needs none).
+    With `author` it is homebrew of that user; otherwise it looks like an SRD row."""
     defaults = dict(
         id=uuid.uuid4(),
         name=f"Item-{uuid.uuid4().hex[:10]}",
-        item_type="weapon",
-        subtype=None,
-        rarity="common",
-        requires_attunement=False,
-        attunement_prerequisite=None,
-        weight=1.0,
-        cost_gp=1.0,
+        item_type_code="adventuring_gear",
+        cost_gp=Decimal("1"),
+        weight_lb=Decimal("1"),
         description=None,
-        properties={},
         source="srd",
         is_homebrew=False,
+        created_by=None,
     )
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
     defaults.update(overrides)
     obj = ItemDefinition(**defaults)
     session.add(obj)
     await session.flush()
     return obj
+
+
+async def srd_item(session: AsyncSession, name: str) -> ItemDefinition:
+    """The seeded SRD item called `name` (seed names are unique)."""
+    result = await session.execute(
+        select(ItemDefinition).where(ItemDefinition.name == name, ItemDefinition.source == "srd")
+    )
+    return result.scalar_one()
+
+
+async def seed_weapon(
+    session: AsyncSession, author: User | None = None, properties: list[dict] = (), **weapon_overrides
+) -> ItemDefinition:
+    """A `weapon` item plus its `weapons` row (simple melee 1d6 slashing by default) and
+    the given `weapon_property_links` rows (dicts of link columns)."""
+    item = await seed_item(session, author=author, item_type_code="weapon")
+    weapon = dict(
+        category_code="simple", is_ranged=False, damage_dice_count=1, damage_die_size=6, damage_flat=0,
+        damage_type_code="slashing", mastery_code=None,
+    )
+    weapon.update(weapon_overrides)
+    session.add(Weapon(item_id=item.id, **weapon))
+    await session.flush()
+    for link in properties:
+        session.add(WeaponPropertyLink(weapon_item_id=item.id, **link))
+    await session.flush()
+    return item
+
+
+async def seed_armor(session: AsyncSession, author: User | None = None, **armor_overrides) -> ItemDefinition:
+    item = await seed_item(session, author=author, item_type_code="armor")
+    armor = dict(
+        category_code="light", base_ac=11, adds_dex_modifier=True, max_dex_modifier=None,
+        strength_requirement=None, stealth_disadvantage=False,
+    )
+    armor.update(armor_overrides)
+    session.add(Armor(item_id=item.id, **armor))
+    await session.flush()
+    return item
+
+
+async def seed_tool(
+    session: AsyncSession, author: User | None = None, tool_type_code: str = "thieves_tools"
+) -> ItemDefinition:
+    item = await seed_item(session, author=author, item_type_code="tool")
+    session.add(Tool(item_id=item.id, tool_type_code=tool_type_code))
+    await session.flush()
+    return item
+
+
+async def seed_pack(
+    session: AsyncSession, author: User | None = None, contents: list[tuple[ItemDefinition, int]] = ()
+) -> ItemDefinition:
+    """A `pack` item holding `contents` (item, quantity); one Torch by default."""
+    item = await seed_item(session, author=author, item_type_code="pack")
+    contents = list(contents) or [(await srd_item(session, "Torch"), 1)]
+    for content, quantity in contents:
+        session.add(ItemContent(pack_item_id=item.id, item_id=content.id, quantity=quantity))
+    await session.flush()
+    return item
 
 
 async def seed_campaign(session: AsyncSession, creator: User, **overrides) -> Campaign:
@@ -442,6 +507,9 @@ async def seed_reference(
     defaults: dict = {}
     if "code" in model.__table__.c:
         defaults.update(code=random_code(), name=f"Ref-{uuid.uuid4().hex[:8]}")
+    if "ability_code" in model.__table__.c:
+        # `skills` and `tool_types` need an ability; the SRD `str` by default.
+        defaults.update(ability_code="str")
     if author is not None:
         defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
     else:
@@ -488,13 +556,52 @@ async def seed_class_skill(session: AsyncSession, class_def: ClassDefinition, *s
     session.expire(class_def, ["skills"])
 
 
+async def seed_grant(session: AsyncSession, **target) -> ProficiencyGrant:
+    """The proficiency grant for `target` (target columns, e.g. `skill_code="stealth"`),
+    reused if it already exists -- the same target is always the same grant."""
+    columns = {column: target.get(column) for column in (
+        "weapon_category_code", "required_weapon_property_code", "armor_category_code", "tool_type_code",
+        "tool_category_code", "skill_code", "saving_throw_ability_code", "language_code",
+    )}
+    unknown = set(target) - set(columns)
+    assert not unknown, f"unknown grant columns: {unknown}"
+    query = select(ProficiencyGrant).where(
+        *(getattr(ProficiencyGrant, column).is_not_distinct_from(value) for column, value in columns.items())
+    )
+    grant = (await session.execute(query)).scalar_one_or_none()
+    if grant is None:
+        grant = ProficiencyGrant(**columns)
+        session.add(grant)
+        await session.flush()
+    return grant
+
+
+async def seed_class_grant(session: AsyncSession, class_def: ClassDefinition, **target) -> ProficiencyGrant:
+    """Link the grant for `target` to the class (raw link insert)."""
+    grant = await seed_grant(session, **target)
+    await session.execute(class_proficiency_grants.insert().values(class_id=class_def.id, grant_id=grant.id))
+    session.expire(class_def, ["proficiency_grants"])
+    return grant
+
+
+async def seed_background_grant(
+    session: AsyncSession, background: BackgroundDefinition, **target
+) -> ProficiencyGrant:
+    """Link the grant for `target` to the background (raw link insert)."""
+    grant = await seed_grant(session, **target)
+    await session.execute(
+        background_proficiency_grants.insert().values(background_id=background.id, grant_id=grant.id)
+    )
+    session.expire(background, ["proficiency_grants"])
+    return grant
+
+
 async def seed_background_skill(
     session: AsyncSession, background: BackgroundDefinition, *skills: Skill
 ) -> None:
-    from app.db.models.compendium import background_skills
+    """Give the background fixed proficiency in `skills` (one `skill` grant each)."""
     for skill in skills:
-        await session.execute(background_skills.insert().values(background_id=background.id, skill_code=skill.code))
-    session.expire(background, ["skills"])
+        await seed_background_grant(session, background, skill_code=skill.code)
 
 
 async def seed_class_initial_equipment(

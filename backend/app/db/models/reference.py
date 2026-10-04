@@ -127,10 +127,23 @@ class ToolCategory(CodeMixin, Base):
     __tablename__ = "tool_categories"
 
 
-class ToolProficiencyOption(CodeMixin, Base):
-    """Transitional (until phase 2): tools a class/background can grant proficiency in."""
+class ToolType(CodeMixin, Base):
+    """A tool as the target of a proficiency (each variant is its own row). The physical
+    item lives in `tools` (app/db/models/items.py) and points here."""
 
-    __tablename__ = "tool_proficiency_options"
+    __tablename__ = "tool_types"
+
+    # NULL for the "Other Tools" (Thieves' Tools, Herbalism Kit, ...).
+    category_code: Mapped[str | None] = mapped_column(
+        String(CODE_LENGTH), ForeignKey("tool_categories.code", ondelete="RESTRICT"), nullable=True
+    )
+    ability_code: Mapped[str] = mapped_column(
+        String(CODE_LENGTH), ForeignKey("ability_scores.code", ondelete="RESTRICT"), nullable=False
+    )
+
+
+class ItemType(CodeMixin, Base):
+    __tablename__ = "item_types"
 
 
 class SpellSchool(CodeMixin, Base):
@@ -183,14 +196,14 @@ class PointBuyCost(HomebrewMixin, Base):
     cost: Mapped[int]  = mapped_column(Integer, nullable=False)
 
 
-# The 23 reference models exposed under /api/compendium. `campaign_homebrew_rules`
+# The 24 reference models exposed under /api/compendium. `campaign_homebrew_rules`
 # only accepts their table names in `resource_table`.
 REFERENCE_MODELS: tuple[type[Base], ...] = (
     Ability, Skill, DamageType, Condition, CreatureType, Size,
     Alignment, Language, Sense, MovementMode,
     WeaponCategory, WeaponProperty, WeaponMastery, ArmorCategory, ToolCategory,
     SpellSchool, RechargeType, ActionType,
-    CharacterLevel, ChallengeRating, PointBuyCost, FeatCategory, ToolProficiencyOption,
+    CharacterLevel, ChallengeRating, PointBuyCost, FeatCategory, ItemType, ToolType,
 )
 REFERENCE_TABLE_NAMES: tuple[str, ...] = tuple(m.__tablename__ for m in REFERENCE_MODELS)
 

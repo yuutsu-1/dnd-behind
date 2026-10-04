@@ -194,6 +194,34 @@ class TestSkills:
             s.SkillUpdate(ability_code=None)
 
 
+class TestToolTypes:
+    def test_ability_code_required_on_create(self):
+        with pytest.raises(ValidationError):
+            s.ToolTypeCreate(code="harp", name="Harp", category_code="musical_instrument")
+
+    def test_category_code_is_optional(self):
+        tool = s.ToolTypeCreate(code="lockpicks", name="Lockpicks", ability_code="dex")
+        assert (tool.category_code, tool.ability_code) == (None, "dex")
+
+    def test_codes_must_look_like_codes(self):
+        with pytest.raises(ValidationError):
+            s.ToolTypeCreate(code="harp", name="Harp", ability_code="cha", category_code="Musical")
+
+    def test_update_ability_code_cannot_be_null(self):
+        with pytest.raises(ValidationError):
+            s.ToolTypeUpdate(ability_code=None)
+
+    def test_update_category_code_can_be_cleared(self):
+        update = s.ToolTypeUpdate(category_code=None)
+        assert "category_code" in update.model_fields_set
+        assert update.category_code is None
+
+    def test_forbidden_fields(self):
+        for field, value in (("source", "srd"), ("is_homebrew", False), ("code", "x")):
+            with pytest.raises(ValidationError):
+                s.ToolTypeUpdate(**{field: value})
+
+
 class TestConditions:
     def test_implies_defaults_to_empty(self):
         assert s.ConditionCreate(code="dazed", name="Dazed").implies == []

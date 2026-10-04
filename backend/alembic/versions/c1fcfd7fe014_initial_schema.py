@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-10-04 13:45:36.399611
 
 """
+import uuid
 from decimal import Decimal
 from typing import Sequence, Union
 
@@ -192,34 +193,228 @@ CHALLENGE_RATINGS = [("0", "0", "0"), ("1_8", "1/8", "0.125"), ("1_4", "1/4", "0
 # (score, cost) -- character-creation.md "Ability Score Point Costs".
 POINT_BUY_COSTS = [(8, 0), (9, 1), (10, 2), (11, 3), (12, 4), (13, 5), (14, 7), (15, 9)]
 
-# Transitional until phase 2 -- equipment.md "Tools": the 17 Artisan's Tools and
-# the Other Tools (Gaming Set and Musical Instrument as generic entries).
-TOOL_PROFICIENCY_OPTIONS = [
-    ("alchemists_supplies", "Alchemist's Supplies"),
-    ("brewers_supplies", "Brewer's Supplies"),
-    ("calligraphers_supplies", "Calligrapher's Supplies"),
-    ("carpenters_tools", "Carpenter's Tools"),
-    ("cartographers_tools", "Cartographer's Tools"),
-    ("cobblers_tools", "Cobbler's Tools"),
-    ("cooks_utensils", "Cook's Utensils"),
-    ("glassblowers_tools", "Glassblower's Tools"),
-    ("jewelers_tools", "Jeweler's Tools"),
-    ("leatherworkers_tools", "Leatherworker's Tools"),
-    ("masons_tools", "Mason's Tools"),
-    ("painters_supplies", "Painter's Supplies"),
-    ("potters_tools", "Potter's Tools"),
-    ("smiths_tools", "Smith's Tools"),
-    ("tinkers_tools", "Tinker's Tools"),
-    ("weavers_tools", "Weaver's Tools"),
-    ("woodcarvers_tools", "Woodcarver's Tools"),
-    ("disguise_kit", "Disguise Kit"),
-    ("forgery_kit", "Forgery Kit"),
-    ("gaming_set", "Gaming Set"),
-    ("herbalism_kit", "Herbalism Kit"),
-    ("musical_instrument", "Musical Instrument"),
-    ("navigators_tools", "Navigator's Tools"),
-    ("poisoners_kit", "Poisoner's Kit"),
-    ("thieves_tools", "Thieves' Tools"),
+# equipment.md "Weapons", "Armor", "Tools" and "Adventuring Gear".
+ITEM_TYPES = [
+    ("weapon", "Weapon"), ("armor", "Armor"), ("tool", "Tool"), ("ammunition", "Ammunition"),
+    ("adventuring_gear", "Adventuring Gear"), ("pack", "Pack"), ("currency", "Currency"),
+]
+
+# (code, name, category_code, ability_code, cost_gp, weight_lb) -- equipment.md "Tools".
+# Each variant is its own tool type (the SRD requires a separate proficiency for each);
+# the physical item of the same name points to it. Gaming Sets weigh "—" (0).
+TOOLS = [
+    ("alchemists_supplies", "Alchemist's Supplies", "artisans_tools", "int", "50", "8"),
+    ("brewers_supplies", "Brewer's Supplies", "artisans_tools", "int", "20", "9"),
+    ("calligraphers_supplies", "Calligrapher's Supplies", "artisans_tools", "dex", "10", "5"),
+    ("carpenters_tools", "Carpenter's Tools", "artisans_tools", "str", "8", "6"),
+    ("cartographers_tools", "Cartographer's Tools", "artisans_tools", "wis", "15", "6"),
+    ("cobblers_tools", "Cobbler's Tools", "artisans_tools", "dex", "5", "5"),
+    ("cooks_utensils", "Cook's Utensils", "artisans_tools", "wis", "1", "8"),
+    ("glassblowers_tools", "Glassblower's Tools", "artisans_tools", "int", "30", "5"),
+    ("jewelers_tools", "Jeweler's Tools", "artisans_tools", "int", "25", "2"),
+    ("leatherworkers_tools", "Leatherworker's Tools", "artisans_tools", "dex", "5", "5"),
+    ("masons_tools", "Mason's Tools", "artisans_tools", "str", "10", "8"),
+    ("painters_supplies", "Painter's Supplies", "artisans_tools", "wis", "10", "5"),
+    ("potters_tools", "Potter's Tools", "artisans_tools", "int", "10", "3"),
+    ("smiths_tools", "Smith's Tools", "artisans_tools", "str", "20", "8"),
+    ("tinkers_tools", "Tinker's Tools", "artisans_tools", "dex", "50", "10"),
+    ("weavers_tools", "Weaver's Tools", "artisans_tools", "dex", "1", "5"),
+    ("woodcarvers_tools", "Woodcarver's Tools", "artisans_tools", "dex", "1", "5"),
+    ("disguise_kit", "Disguise Kit", None, "cha", "25", "3"),
+    ("forgery_kit", "Forgery Kit", None, "dex", "15", "5"),
+    ("herbalism_kit", "Herbalism Kit", None, "int", "5", "3"),
+    ("navigators_tools", "Navigator's Tools", None, "wis", "25", "2"),
+    ("poisoners_kit", "Poisoner's Kit", None, "int", "50", "2"),
+    ("thieves_tools", "Thieves' Tools", None, "dex", "25", "1"),
+    ("dice_set", "Dice Set", "gaming_set", "wis", "0.1", "0"),
+    ("dragonchess_set", "Dragonchess Set", "gaming_set", "wis", "1", "0"),
+    ("playing_card_set", "Playing Card Set", "gaming_set", "wis", "0.5", "0"),
+    ("three_dragon_ante_set", "Three-Dragon Ante Set", "gaming_set", "wis", "1", "0"),
+    ("bagpipes", "Bagpipes", "musical_instrument", "cha", "30", "6"),
+    ("drum", "Drum", "musical_instrument", "cha", "6", "3"),
+    ("dulcimer", "Dulcimer", "musical_instrument", "cha", "25", "10"),
+    ("flute", "Flute", "musical_instrument", "cha", "2", "1"),
+    ("horn", "Horn", "musical_instrument", "cha", "3", "2"),
+    ("lute", "Lute", "musical_instrument", "cha", "35", "2"),
+    ("lyre", "Lyre", "musical_instrument", "cha", "30", "2"),
+    ("pan_flute", "Pan Flute", "musical_instrument", "cha", "12", "2"),
+    ("shawm", "Shawm", "musical_instrument", "cha", "2", "1"),
+    ("viol", "Viol", "musical_instrument", "cha", "30", "1"),
+]
+
+# --- SRD 2024 equipment (equipment.md) -----------------------------------------
+# One item = one unit. Prices are in GP (1 SP = 0.1, 1 CP = 0.01) and weights in lb;
+# a weight of "—" is 0. Ammunition is priced per piece (pack price / pack size).
+# Ids are uuid5(SRD_ITEM_NAMESPACE, name): stable across rebuilds, so the sub-rows
+# below (ammunition of a weapon, pack contents) are wired by name without lookups.
+SRD_ITEM_NAMESPACE = uuid.UUID("5d0f3b8e-2c4a-4f6e-9b1d-7a3c5e8f0b24")
+
+# (name, cost_gp) -- "Coins": fifty coins weigh a pound.
+COINS = [
+    ("Copper Piece", "0.01"), ("Silver Piece", "0.1"), ("Electrum Piece", "0.5"),
+    ("Gold Piece", "1"), ("Platinum Piece", "10"),
+]
+COIN_WEIGHT_LB = "0.02"
+
+# (name, cost_gp, weight_lb) -- "Ammunition": Arrows 20 for 1 GP/1 lb, Bolts 20 for
+# 1 GP/1½ lb, Firearm Bullets 10 for 3 GP/2 lb, Sling Bullets 20 for 4 CP/1½ lb,
+# Needles 50 for 1 GP/1 lb.
+AMMUNITION = [
+    ("Arrow", "0.05", "0.05"),
+    ("Bolt", "0.05", "0.075"),
+    ("Bullet, Firearm", "0.3", "0.2"),
+    ("Bullet, Sling", "0.002", "0.075"),
+    ("Needle", "0.02", "0.02"),
+]
+
+# (name, category, is_ranged, damage ("XdY" or a flat number), damage type, mastery,
+#  properties, cost_gp, weight_lb). A property is a code, ("range", normal, long),
+# ("versatile", die size) or ("ammunition", ammunition item name). "Thrown (Range
+# 20/60)" is `thrown` + `range`; "Ammunition (Range 80/320; Bolt)" is `ammunition` + `range`.
+WEAPONS = [
+    ("Club", "simple", False, "1d4", "bludgeoning", "slow", ["light"], "0.1", "2"),
+    ("Dagger", "simple", False, "1d4", "piercing", "nick", ["finesse", "light", "thrown", ("range", 20, 60)], "2", "1"),
+    ("Greatclub", "simple", False, "1d8", "bludgeoning", "push", ["two_handed"], "0.2", "10"),
+    ("Handaxe", "simple", False, "1d6", "slashing", "vex", ["light", "thrown", ("range", 20, 60)], "5", "2"),
+    ("Javelin", "simple", False, "1d6", "piercing", "slow", ["thrown", ("range", 30, 120)], "0.5", "2"),
+    ("Light Hammer", "simple", False, "1d4", "bludgeoning", "nick", ["light", "thrown", ("range", 20, 60)], "2", "2"),
+    ("Mace", "simple", False, "1d6", "bludgeoning", "sap", [], "5", "4"),
+    ("Quarterstaff", "simple", False, "1d6", "bludgeoning", "topple", [("versatile", 8)], "0.2", "4"),
+    ("Sickle", "simple", False, "1d4", "slashing", "nick", ["light"], "1", "2"),
+    ("Spear", "simple", False, "1d6", "piercing", "sap", ["thrown", ("range", 20, 60), ("versatile", 8)], "1", "3"),
+    ("Dart", "simple", True, "1d4", "piercing", "vex", ["finesse", "thrown", ("range", 20, 60)], "0.05", "0.25"),
+    ("Light Crossbow", "simple", True, "1d8", "piercing", "slow",
+     [("ammunition", "Bolt"), ("range", 80, 320), "loading", "two_handed"], "25", "5"),
+    ("Shortbow", "simple", True, "1d6", "piercing", "vex",
+     [("ammunition", "Arrow"), ("range", 80, 320), "two_handed"], "25", "2"),
+    ("Sling", "simple", True, "1d4", "bludgeoning", "slow",
+     [("ammunition", "Bullet, Sling"), ("range", 30, 120)], "0.1", "0"),
+    ("Battleaxe", "martial", False, "1d8", "slashing", "topple", [("versatile", 10)], "10", "4"),
+    ("Flail", "martial", False, "1d8", "bludgeoning", "sap", [], "10", "2"),
+    ("Glaive", "martial", False, "1d10", "slashing", "graze", ["heavy", "reach", "two_handed"], "20", "6"),
+    ("Greataxe", "martial", False, "1d12", "slashing", "cleave", ["heavy", "two_handed"], "30", "7"),
+    ("Greatsword", "martial", False, "2d6", "slashing", "graze", ["heavy", "two_handed"], "50", "6"),
+    ("Halberd", "martial", False, "1d10", "slashing", "cleave", ["heavy", "reach", "two_handed"], "20", "6"),
+    # "Two-Handed (unless mounted)": stored as `two_handed`, the exception goes in the description.
+    ("Lance", "martial", False, "1d10", "piercing", "topple", ["heavy", "reach", "two_handed"], "10", "6"),
+    ("Longsword", "martial", False, "1d8", "slashing", "sap", [("versatile", 10)], "15", "3"),
+    ("Maul", "martial", False, "2d6", "bludgeoning", "topple", ["heavy", "two_handed"], "10", "10"),
+    ("Morningstar", "martial", False, "1d8", "piercing", "sap", [], "15", "4"),
+    ("Pike", "martial", False, "1d10", "piercing", "push", ["heavy", "reach", "two_handed"], "5", "18"),
+    ("Rapier", "martial", False, "1d8", "piercing", "vex", ["finesse"], "25", "2"),
+    ("Scimitar", "martial", False, "1d6", "slashing", "nick", ["finesse", "light"], "25", "3"),
+    ("Shortsword", "martial", False, "1d6", "piercing", "vex", ["finesse", "light"], "10", "2"),
+    ("Trident", "martial", False, "1d8", "piercing", "topple",
+     ["thrown", ("range", 20, 60), ("versatile", 10)], "5", "4"),
+    ("Warhammer", "martial", False, "1d8", "bludgeoning", "push", [("versatile", 10)], "15", "5"),
+    ("War Pick", "martial", False, "1d8", "piercing", "sap", [("versatile", 10)], "5", "2"),
+    ("Whip", "martial", False, "1d4", "slashing", "slow", ["finesse", "reach"], "2", "3"),
+    ("Blowgun", "martial", True, "1", "piercing", "vex",
+     [("ammunition", "Needle"), ("range", 25, 100), "loading"], "10", "1"),
+    ("Hand Crossbow", "martial", True, "1d6", "piercing", "vex",
+     [("ammunition", "Bolt"), ("range", 30, 120), "light", "loading"], "75", "3"),
+    ("Heavy Crossbow", "martial", True, "1d10", "piercing", "push",
+     [("ammunition", "Bolt"), ("range", 100, 400), "heavy", "loading", "two_handed"], "50", "18"),
+    ("Longbow", "martial", True, "1d8", "piercing", "slow",
+     [("ammunition", "Arrow"), ("range", 150, 600), "heavy", "two_handed"], "50", "2"),
+    ("Musket", "martial", True, "1d12", "piercing", "slow",
+     [("ammunition", "Bullet, Firearm"), ("range", 40, 120), "loading", "two_handed"], "500", "10"),
+    ("Pistol", "martial", True, "1d10", "piercing", "vex",
+     [("ammunition", "Bullet, Firearm"), ("range", 30, 90), "loading"], "250", "3"),
+]
+WEAPON_DESCRIPTIONS = {"Lance": "Two-Handed (unless mounted)."}
+
+# (name, category, base_ac, adds_dex_modifier, max_dex_modifier, strength_requirement,
+#  stealth_disadvantage, cost_gp, weight_lb). For the Shield, `base_ac` is the +2 bonus.
+ARMORS = [
+    ("Padded Armor", "light", 11, True, None, None, True, "5", "8"),
+    ("Leather Armor", "light", 11, True, None, None, False, "10", "10"),
+    ("Studded Leather Armor", "light", 12, True, None, None, False, "45", "13"),
+    ("Hide Armor", "medium", 12, True, 2, None, False, "10", "12"),
+    ("Chain Shirt", "medium", 13, True, 2, None, False, "50", "20"),
+    ("Scale Mail", "medium", 14, True, 2, None, True, "50", "45"),
+    ("Breastplate", "medium", 14, True, 2, None, False, "400", "20"),
+    ("Half Plate Armor", "medium", 15, True, 2, None, True, "750", "40"),
+    ("Ring Mail", "heavy", 14, False, None, None, True, "30", "40"),
+    ("Chain Mail", "heavy", 16, False, None, 13, True, "75", "55"),
+    ("Splint Armor", "heavy", 17, False, None, 15, True, "200", "60"),
+    ("Plate Armor", "heavy", 18, False, None, 15, True, "1500", "65"),
+    ("Shield", "shield", 2, False, None, None, False, "10", "6"),
+]
+
+# (name, cost_gp, weight_lb) -- the "Adventuring Gear" table without the "Varies" rows
+# (Ammunition, Arcane Focus, Druidic Focus, Holy Symbol) and the packs (PACKS below).
+ADVENTURING_GEAR = [
+    ("Acid", "25", "1"), ("Alchemist's Fire", "50", "1"), ("Antitoxin", "50", "0"),
+    ("Backpack", "2", "5"), ("Ball Bearings", "1", "2"), ("Barrel", "2", "70"), ("Basket", "0.4", "2"),
+    ("Bedroll", "1", "7"), ("Bell", "1", "0"), ("Blanket", "0.5", "3"), ("Block and Tackle", "1", "5"),
+    ("Book", "25", "5"), ("Bottle, Glass", "2", "2"), ("Bucket", "0.05", "2"), ("Caltrops", "1", "2"),
+    ("Candle", "0.01", "0"), ("Case, Crossbow Bolt", "1", "1"), ("Case, Map or Scroll", "1", "1"),
+    ("Chain", "5", "10"), ("Chest", "5", "25"), ("Climber's Kit", "25", "12"), ("Clothes, Fine", "15", "6"),
+    ("Clothes, Traveler's", "2", "4"), ("Component Pouch", "25", "2"), ("Costume", "5", "4"),
+    ("Crowbar", "2", "5"), ("Flask", "0.02", "1"), ("Grappling Hook", "2", "4"), ("Healer's Kit", "5", "3"),
+    ("Holy Water", "25", "1"), ("Hunting Trap", "5", "25"), ("Ink", "10", "0"), ("Ink Pen", "0.02", "0"),
+    ("Jug", "0.02", "4"), ("Ladder", "0.1", "25"), ("Lamp", "0.5", "1"), ("Lantern, Bullseye", "10", "2"),
+    ("Lantern, Hooded", "5", "2"), ("Lock", "10", "1"), ("Magnifying Glass", "100", "0"),
+    ("Manacles", "2", "6"), ("Map", "1", "0"), ("Mirror", "5", "0.5"), ("Net", "1", "3"), ("Oil", "0.1", "1"),
+    ("Paper", "0.2", "0"), ("Parchment", "0.1", "0"), ("Perfume", "5", "0"), ("Poison, Basic", "100", "0"),
+    ("Pole", "0.05", "7"), ("Pot, Iron", "2", "10"), ("Potion of Healing", "50", "0.5"), ("Pouch", "0.5", "1"),
+    ("Quiver", "1", "1"), ("Ram, Portable", "4", "35"), ("Rations", "0.5", "2"), ("Robe", "1", "4"),
+    ("Rope", "1", "5"), ("Sack", "0.01", "0.5"), ("Shovel", "2", "5"), ("Signal Whistle", "0.05", "0"),
+    ("Spell Scroll (Cantrip)", "30", "0"), ("Spell Scroll (Level 1)", "50", "0"), ("Spikes, Iron", "1", "5"),
+    ("Spyglass", "1000", "1"), ("String", "0.1", "0"), ("Tent", "2", "20"), ("Tinderbox", "0.5", "1"),
+    ("Torch", "0.01", "1"), ("Vial", "1", "0"), ("Waterskin", "0.2", "5"),
+]
+
+# (name, cost_gp, weight_lb, description) -- "Arcane Focuses", "Druidic Focuses" and
+# "Holy Symbols": one adventuring-gear item per form; the table notes go to `description`.
+FOCUSES = [
+    ("Arcane Focus (Crystal)", "10", "1", None),
+    ("Arcane Focus (Orb)", "20", "3", None),
+    ("Arcane Focus (Rod)", "10", "2", None),
+    ("Arcane Focus (Staff)", "5", "4", "Also a Quarterstaff."),
+    ("Arcane Focus (Wand)", "10", "1", None),
+    ("Druidic Focus (Sprig of Mistletoe)", "1", "0", None),
+    ("Druidic Focus (Wooden Staff)", "5", "4", "Also a Quarterstaff."),
+    ("Druidic Focus (Yew Wand)", "10", "1", None),
+    ("Holy Symbol (Amulet)", "5", "1", "Worn or held."),
+    ("Holy Symbol (Emblem)", "5", "0", "Borne on fabric or a Shield."),
+    ("Holy Symbol (Reliquary)", "5", "2", "Held."),
+]
+
+# Capacity in pounds (Backpack, Basket, Pouch and Sack descriptions).
+CONTAINERS = {"Backpack": "30", "Basket": "40", "Pouch": "6", "Sack": "30"}
+
+# (name, cost_gp, weight_lb, [(content item name, quantity)]) -- the pack descriptions.
+PACKS = [
+    ("Burglar's Pack", "16", "42", [
+        ("Backpack", 1), ("Ball Bearings", 1), ("Bell", 1), ("Candle", 10), ("Crowbar", 1),
+        ("Lantern, Hooded", 1), ("Oil", 7), ("Rations", 5), ("Rope", 1), ("Tinderbox", 1), ("Waterskin", 1),
+    ]),
+    ("Diplomat's Pack", "39", "39", [
+        ("Chest", 1), ("Clothes, Fine", 1), ("Ink", 1), ("Ink Pen", 5), ("Lamp", 1), ("Case, Map or Scroll", 2),
+        ("Oil", 4), ("Paper", 5), ("Parchment", 5), ("Perfume", 1), ("Tinderbox", 1),
+    ]),
+    ("Dungeoneer's Pack", "12", "55", [
+        ("Backpack", 1), ("Caltrops", 1), ("Crowbar", 1), ("Oil", 2), ("Rations", 10), ("Rope", 1),
+        ("Tinderbox", 1), ("Torch", 10), ("Waterskin", 1),
+    ]),
+    ("Entertainer's Pack", "40", "58.5", [
+        ("Backpack", 1), ("Bedroll", 1), ("Bell", 1), ("Lantern, Bullseye", 1), ("Costume", 3), ("Mirror", 1),
+        ("Oil", 8), ("Rations", 9), ("Tinderbox", 1), ("Waterskin", 1),
+    ]),
+    ("Explorer's Pack", "10", "55", [
+        ("Backpack", 1), ("Bedroll", 1), ("Oil", 2), ("Rations", 10), ("Rope", 1), ("Tinderbox", 1),
+        ("Torch", 10), ("Waterskin", 1),
+    ]),
+    ("Priest's Pack", "33", "29", [
+        ("Backpack", 1), ("Blanket", 1), ("Holy Water", 1), ("Lamp", 1), ("Rations", 7), ("Robe", 1),
+        ("Tinderbox", 1),
+    ]),
+    ("Scholar's Pack", "40", "22", [
+        ("Backpack", 1), ("Book", 1), ("Ink", 1), ("Ink Pen", 1), ("Lamp", 1), ("Oil", 10), ("Parchment", 10),
+        ("Tinderbox", 1),
+    ]),
 ]
 
 _SRD = {"source": "srd", "is_homebrew": False, "created_by": None}
@@ -256,13 +451,20 @@ def _seed() -> None:
         ("recharge_types", RECHARGE_TYPES),
         ("action_types", ACTION_TYPES),
         ("feat_categories", FEAT_CATEGORIES),
-        ("tool_proficiency_options", TOOL_PROFICIENCY_OPTIONS),
+        ("item_types", ITEM_TYPES),
     ]:
         _insert_code_rows(name, rows)
 
     op.bulk_insert(
         _ref_table("skills", sa.column("ability_code", sa.String)),
         [{"code": c, "name": n, "ability_code": a, **_SRD} for c, n, a in SKILLS],
+    )
+    op.bulk_insert(
+        _ref_table("tool_types", sa.column("category_code", sa.String), sa.column("ability_code", sa.String)),
+        [
+            {"code": c, "name": n, "category_code": cat, "ability_code": a, **_SRD}
+            for c, n, cat, a, _cost, _weight in TOOLS
+        ],
     )
     op.bulk_insert(
         sa.table("condition_implications",
@@ -305,6 +507,112 @@ def _seed() -> None:
                  sa.column("created_by", sa.UUID)),
         [{"score": score, "cost": cost, **_SRD} for score, cost in POINT_BUY_COSTS],
     )
+    _seed_items()
+
+
+def _srd_item_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(SRD_ITEM_NAMESPACE, name)
+
+
+def _weapon_damage(damage: str) -> dict:
+    if "d" in damage:
+        count, size = damage.split("d")
+        return {"damage_dice_count": int(count), "damage_die_size": int(size), "damage_flat": 0}
+    return {"damage_dice_count": None, "damage_die_size": None, "damage_flat": int(damage)}
+
+
+def _property_link(item_id: uuid.UUID, prop) -> dict:
+    link = {
+        "weapon_item_id": item_id, "range_normal_ft": None, "range_long_ft": None,
+        "versatile_die_size": None, "ammunition_item_id": None,
+    }
+    if isinstance(prop, str):
+        return {**link, "property_code": prop}
+    code, *params = prop
+    if code == "range":
+        return {**link, "property_code": code, "range_normal_ft": params[0], "range_long_ft": params[1]}
+    if code == "versatile":
+        return {**link, "property_code": code, "versatile_die_size": params[0]}
+    return {**link, "property_code": code, "ammunition_item_id": _srd_item_id(params[0])}
+
+
+def _seed_items() -> None:
+    items: list[dict] = []
+    weapons: list[dict] = []
+    links: list[dict] = []
+    armors: list[dict] = []
+    tools: list[dict] = []
+    containers: list[dict] = []
+    contents: list[dict] = []
+
+    def add(name: str, item_type: str, cost: str, weight: str, description: str | None = None) -> uuid.UUID:
+        item_id = _srd_item_id(name)
+        items.append({
+            "id": item_id, "name": name, "item_type_code": item_type,
+            "cost_gp": Decimal(cost), "weight_lb": Decimal(weight), "description": description, **_SRD,
+        })
+        return item_id
+
+    for name, cost in COINS:
+        add(name, "currency", cost, COIN_WEIGHT_LB)
+    for name, cost, weight in AMMUNITION:
+        add(name, "ammunition", cost, weight)
+    for name, category, is_ranged, damage, damage_type, mastery, props, cost, weight in WEAPONS:
+        item_id = add(name, "weapon", cost, weight, WEAPON_DESCRIPTIONS.get(name))
+        weapons.append({
+            "item_id": item_id, "category_code": category, "is_ranged": is_ranged,
+            "damage_type_code": damage_type, "mastery_code": mastery, **_weapon_damage(damage),
+        })
+        links.extend(_property_link(item_id, prop) for prop in props)
+    for name, category, base_ac, adds_dex, max_dex, strength, stealth, cost, weight in ARMORS:
+        armors.append({
+            "item_id": add(name, "armor", cost, weight), "category_code": category, "base_ac": base_ac,
+            "adds_dex_modifier": adds_dex, "max_dex_modifier": max_dex, "strength_requirement": strength,
+            "stealth_disadvantage": stealth,
+        })
+    for code, name, _category, _ability, cost, weight in TOOLS:
+        tools.append({"item_id": add(name, "tool", cost, weight), "tool_type_code": code})
+    for name, cost, weight in ADVENTURING_GEAR:
+        item_id = add(name, "adventuring_gear", cost, weight)
+        if name in CONTAINERS:
+            containers.append({"item_id": item_id, "capacity_weight_lb": Decimal(CONTAINERS[name])})
+    for name, cost, weight, description in FOCUSES:
+        add(name, "adventuring_gear", cost, weight, description)
+    for name, cost, weight, pack_contents in PACKS:
+        pack_id = add(name, "pack", cost, weight)
+        contents.extend(
+            {"pack_item_id": pack_id, "item_id": _srd_item_id(content), "quantity": quantity}
+            for content, quantity in pack_contents
+        )
+
+    uid, string, integer, boolean, numeric = sa.UUID, sa.String, sa.Integer, sa.Boolean, sa.Numeric
+    op.bulk_insert(sa.table(
+        "item_definitions", sa.column("id", uid), sa.column("name", string), sa.column("item_type_code", string),
+        sa.column("cost_gp", numeric), sa.column("weight_lb", numeric), sa.column("description", sa.Text),
+        sa.column("source", string), sa.column("is_homebrew", boolean), sa.column("created_by", uid),
+    ), items)
+    op.bulk_insert(sa.table(
+        "weapons", sa.column("item_id", uid), sa.column("category_code", string), sa.column("is_ranged", boolean),
+        sa.column("damage_dice_count", integer), sa.column("damage_die_size", integer),
+        sa.column("damage_flat", integer), sa.column("damage_type_code", string), sa.column("mastery_code", string),
+    ), weapons)
+    op.bulk_insert(sa.table(
+        "weapon_property_links", sa.column("weapon_item_id", uid), sa.column("property_code", string),
+        sa.column("range_normal_ft", integer), sa.column("range_long_ft", integer),
+        sa.column("versatile_die_size", integer), sa.column("ammunition_item_id", uid),
+    ), links)
+    op.bulk_insert(sa.table(
+        "armors", sa.column("item_id", uid), sa.column("category_code", string), sa.column("base_ac", integer),
+        sa.column("adds_dex_modifier", boolean), sa.column("max_dex_modifier", integer),
+        sa.column("strength_requirement", integer), sa.column("stealth_disadvantage", boolean),
+    ), armors)
+    op.bulk_insert(sa.table("tools", sa.column("item_id", uid), sa.column("tool_type_code", string)), tools)
+    op.bulk_insert(
+        sa.table("containers", sa.column("item_id", uid), sa.column("capacity_weight_lb", numeric)), containers
+    )
+    op.bulk_insert(sa.table(
+        "item_contents", sa.column("pack_item_id", uid), sa.column("item_id", uid), sa.column("quantity", integer),
+    ), contents)
 
 
 def upgrade() -> None:
@@ -472,25 +780,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
-    op.create_table('item_definitions',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('name', sa.String(length=100), nullable=False),
-    sa.Column('item_type', sa.String(length=20), nullable=False),
-    sa.Column('subtype', sa.String(length=30), nullable=True),
-    sa.Column('rarity', sa.String(length=15), nullable=False),
-    sa.Column('requires_attunement', sa.Boolean(), nullable=False),
-    sa.Column('attunement_prerequisite', sa.Text(), nullable=True),
-    sa.Column('weight', sa.Float(), nullable=True),
-    sa.Column('cost_gp', sa.Float(), nullable=True),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('properties', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-    sa.Column('source', sa.String(length=20), nullable=False),
-    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
-    sa.Column('created_by', sa.UUID(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
     op.create_table('languages',
     sa.Column('rarity', sa.String(length=10), nullable=False),
     sa.Column('code', sa.String(length=50), nullable=False),
@@ -612,16 +901,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
     sa.PrimaryKeyConstraint('code')
     )
-    op.create_table('tool_proficiency_options',
-    sa.Column('code', sa.String(length=50), nullable=False),
-    sa.Column('name', sa.String(length=100), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
-    sa.Column('source', sa.String(length=20), nullable=False),
-    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
-    sa.Column('created_by', sa.UUID(), nullable=True),
-    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('code')
-    )
     op.create_table('weapon_categories',
     sa.Column('code', sa.String(length=50), nullable=False),
     sa.Column('name', sa.String(length=100), nullable=False),
@@ -652,6 +931,118 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
     sa.PrimaryKeyConstraint('code')
     )
+    op.create_table('item_types',
+    sa.Column('code', sa.String(length=50), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('source', sa.String(length=20), nullable=False),
+    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
+    sa.Column('created_by', sa.UUID(), nullable=True),
+    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('code')
+    )
+    op.create_table('tool_types',
+    sa.Column('category_code', sa.String(length=50), nullable=True),
+    sa.Column('ability_code', sa.String(length=50), nullable=False),
+    sa.Column('code', sa.String(length=50), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('source', sa.String(length=20), nullable=False),
+    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
+    sa.Column('created_by', sa.UUID(), nullable=True),
+    sa.ForeignKeyConstraint(['ability_code'], ['ability_scores.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['category_code'], ['tool_categories.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('code')
+    )
+    op.create_table('item_definitions',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('name', sa.String(length=100), nullable=False),
+    sa.Column('item_type_code', sa.String(length=50), nullable=False),
+    sa.Column('cost_gp', sa.Numeric(precision=12, scale=4), nullable=True),
+    sa.Column('weight_lb', sa.Numeric(precision=12, scale=4), nullable=True),
+    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('source', sa.String(length=20), nullable=False),
+    sa.Column('is_homebrew', sa.Boolean(), nullable=False),
+    sa.Column('created_by', sa.UUID(), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['item_type_code'], ['item_types.code'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('weapons',
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('category_code', sa.String(length=50), nullable=False),
+    sa.Column('is_ranged', sa.Boolean(), nullable=False),
+    sa.Column('damage_dice_count', sa.Integer(), nullable=True),
+    sa.Column('damage_die_size', sa.Integer(), nullable=True),
+    sa.Column('damage_flat', sa.Integer(), nullable=False),
+    sa.Column('damage_type_code', sa.String(length=50), nullable=False),
+    sa.Column('mastery_code', sa.String(length=50), nullable=True),
+    sa.CheckConstraint('(damage_dice_count IS NULL) = (damage_die_size IS NULL)', name='ck_weapons_damage_dice_pair'),
+    sa.CheckConstraint('damage_dice_count IS NOT NULL OR damage_flat >= 1', name='ck_weapons_damage_flat_without_dice'),
+    sa.CheckConstraint('damage_dice_count >= 1', name='ck_weapons_damage_dice_count'),
+    sa.CheckConstraint('damage_die_size IN (4, 6, 8, 10, 12, 20)', name='ck_weapons_damage_die_size'),
+    sa.ForeignKeyConstraint(['category_code'], ['weapon_categories.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['damage_type_code'], ['damage_types.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['mastery_code'], ['weapon_masteries.code'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('item_id')
+    )
+    op.create_table('weapon_property_links',
+    sa.Column('weapon_item_id', sa.UUID(), nullable=False),
+    sa.Column('property_code', sa.String(length=50), nullable=False),
+    sa.Column('range_normal_ft', sa.Integer(), nullable=True),
+    sa.Column('range_long_ft', sa.Integer(), nullable=True),
+    sa.Column('versatile_die_size', sa.Integer(), nullable=True),
+    sa.Column('ammunition_item_id', sa.UUID(), nullable=True),
+    sa.CheckConstraint('range_normal_ft > 0', name='ck_weapon_property_links_range_normal'),
+    sa.CheckConstraint('range_long_ft >= range_normal_ft', name='ck_weapon_property_links_range_long'),
+    sa.CheckConstraint('versatile_die_size IN (4, 6, 8, 10, 12, 20)', name='ck_weapon_property_links_versatile_die_size'),
+    sa.ForeignKeyConstraint(['ammunition_item_id'], ['item_definitions.id'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['property_code'], ['weapon_properties.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['weapon_item_id'], ['weapons.item_id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('weapon_item_id', 'property_code')
+    )
+    op.create_table('armors',
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('category_code', sa.String(length=50), nullable=False),
+    sa.Column('base_ac', sa.Integer(), nullable=False),
+    sa.Column('adds_dex_modifier', sa.Boolean(), nullable=False),
+    sa.Column('max_dex_modifier', sa.Integer(), nullable=True),
+    sa.Column('strength_requirement', sa.Integer(), nullable=True),
+    sa.Column('stealth_disadvantage', sa.Boolean(), nullable=False),
+    sa.CheckConstraint('base_ac >= 0', name='ck_armors_base_ac'),
+    sa.CheckConstraint('max_dex_modifier >= 0', name='ck_armors_max_dex_modifier'),
+    sa.CheckConstraint('strength_requirement >= 1', name='ck_armors_strength_requirement'),
+    sa.ForeignKeyConstraint(['category_code'], ['armor_categories.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('item_id')
+    )
+    op.create_table('tools',
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('tool_type_code', sa.String(length=50), nullable=False),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['tool_type_code'], ['tool_types.code'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('item_id')
+    )
+    op.create_table('containers',
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('capacity_weight_lb', sa.Numeric(precision=12, scale=4), nullable=False),
+    sa.CheckConstraint('capacity_weight_lb > 0', name='ck_containers_capacity_weight_lb'),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('item_id')
+    )
+    op.create_table('item_contents',
+    sa.Column('pack_item_id', sa.UUID(), nullable=False),
+    sa.Column('item_id', sa.UUID(), nullable=False),
+    sa.Column('quantity', sa.Integer(), nullable=False),
+    sa.CheckConstraint('quantity >= 1', name='ck_item_contents_quantity'),
+    sa.CheckConstraint('pack_item_id <> item_id', name='ck_item_contents_not_self'),
+    sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['pack_item_id'], ['item_definitions.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('pack_item_id', 'item_id')
+    )
     op.create_table('background_definitions',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(length=100), nullable=False),
@@ -670,7 +1061,7 @@ def upgrade() -> None:
     sa.Column('resource_table', sa.String(length=50), nullable=False),
     sa.Column('resource_key', sa.String(length=50), nullable=False),
     sa.Column('campaign_id', sa.UUID(), nullable=False),
-    sa.CheckConstraint("resource_table IN ('ability_scores', 'skills', 'damage_types', 'conditions', 'creature_types', 'sizes', 'alignments', 'languages', 'senses', 'movement_modes', 'weapon_categories', 'weapon_properties', 'weapon_masteries', 'armor_categories', 'tool_categories', 'spell_schools', 'recharge_types', 'action_types', 'character_levels', 'challenge_ratings', 'point_buy_costs', 'feat_categories', 'tool_proficiency_options')", name='ck_campaign_homebrew_rules_resource_table'),
+    sa.CheckConstraint("resource_table IN ('ability_scores', 'skills', 'damage_types', 'conditions', 'creature_types', 'sizes', 'alignments', 'languages', 'senses', 'movement_modes', 'weapon_categories', 'weapon_properties', 'weapon_masteries', 'armor_categories', 'tool_categories', 'spell_schools', 'recharge_types', 'action_types', 'character_levels', 'challenge_ratings', 'point_buy_costs', 'feat_categories', 'item_types', 'tool_types')", name='ck_campaign_homebrew_rules_resource_table'),
     sa.ForeignKeyConstraint(['campaign_id'], ['campaigns.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('resource_table', 'resource_key', 'campaign_id')
     )
@@ -740,6 +1131,43 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('name')
     )
+    op.create_table('proficiency_grants',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('weapon_category_code', sa.String(length=50), nullable=True),
+    sa.Column('required_weapon_property_code', sa.String(length=50), nullable=True),
+    sa.Column('armor_category_code', sa.String(length=50), nullable=True),
+    sa.Column('tool_type_code', sa.String(length=50), nullable=True),
+    sa.Column('tool_category_code', sa.String(length=50), nullable=True),
+    sa.Column('skill_code', sa.String(length=50), nullable=True),
+    sa.Column('saving_throw_ability_code', sa.String(length=50), nullable=True),
+    sa.Column('language_code', sa.String(length=50), nullable=True),
+    sa.CheckConstraint('num_nonnulls(weapon_category_code, armor_category_code, tool_type_code, tool_category_code, skill_code, saving_throw_ability_code, language_code) = 1', name='ck_proficiency_grants_single_target'),
+    sa.CheckConstraint('required_weapon_property_code IS NULL OR weapon_category_code IS NOT NULL', name='ck_proficiency_grants_required_property'),
+    sa.ForeignKeyConstraint(['armor_category_code'], ['armor_categories.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['language_code'], ['languages.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['required_weapon_property_code'], ['weapon_properties.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['saving_throw_ability_code'], ['ability_scores.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['skill_code'], ['skills.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['tool_category_code'], ['tool_categories.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['tool_type_code'], ['tool_types.code'], ondelete='RESTRICT'),
+    sa.ForeignKeyConstraint(['weapon_category_code'], ['weapon_categories.code'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('weapon_category_code', 'armor_category_code', 'tool_type_code', 'tool_category_code', 'skill_code', 'saving_throw_ability_code', 'language_code', 'required_weapon_property_code', name='uq_proficiency_grants_target', postgresql_nulls_not_distinct=True)
+    )
+    op.create_table('background_proficiency_grants',
+    sa.Column('background_id', sa.UUID(), nullable=False),
+    sa.Column('grant_id', sa.UUID(), nullable=False),
+    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['grant_id'], ['proficiency_grants.id'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('background_id', 'grant_id')
+    )
+    op.create_table('class_proficiency_grants',
+    sa.Column('class_id', sa.UUID(), nullable=False),
+    sa.Column('grant_id', sa.UUID(), nullable=False),
+    sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['grant_id'], ['proficiency_grants.id'], ondelete='RESTRICT'),
+    sa.PrimaryKeyConstraint('class_id', 'grant_id')
+    )
     op.create_table('background_ability_scores',
     sa.Column('background_id', sa.UUID(), nullable=False),
     sa.Column('ability_code', sa.String(length=50), nullable=False),
@@ -757,20 +1185,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['item_id'], ['item_definitions.id'], ),
     sa.PrimaryKeyConstraint('id')
-    )
-    op.create_table('background_skills',
-    sa.Column('background_id', sa.UUID(), nullable=False),
-    sa.Column('skill_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['skill_code'], ['skills.code'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('background_id', 'skill_code')
-    )
-    op.create_table('background_tool_proficiencies',
-    sa.Column('background_id', sa.UUID(), nullable=False),
-    sa.Column('tool_proficiency_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['background_id'], ['background_definitions.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['tool_proficiency_code'], ['tool_proficiency_options.code'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('background_id', 'tool_proficiency_code')
     )
     op.create_table('characters',
     sa.Column('id', sa.UUID(), nullable=False),
@@ -801,13 +1215,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_table('class_armor_proficiencies',
-    sa.Column('class_id', sa.UUID(), nullable=False),
-    sa.Column('armor_category_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['armor_category_code'], ['armor_categories.code'], ondelete='RESTRICT'),
-    sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('class_id', 'armor_category_code')
-    )
     op.create_table('class_initial_equipment',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('class_id', sa.UUID(), nullable=False),
@@ -826,33 +1233,12 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('class_id', 'ability_code')
     )
-    op.create_table('class_saving_throws',
-    sa.Column('class_id', sa.UUID(), nullable=False),
-    sa.Column('ability_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['ability_code'], ['ability_scores.code'], ondelete='RESTRICT'),
-    sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('class_id', 'ability_code')
-    )
     op.create_table('class_skills',
     sa.Column('class_id', sa.UUID(), nullable=False),
     sa.Column('skill_code', sa.String(length=50), nullable=False),
     sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['skill_code'], ['skills.code'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('class_id', 'skill_code')
-    )
-    op.create_table('class_tool_proficiencies',
-    sa.Column('class_id', sa.UUID(), nullable=False),
-    sa.Column('tool_proficiency_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['tool_proficiency_code'], ['tool_proficiency_options.code'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('class_id', 'tool_proficiency_code')
-    )
-    op.create_table('class_weapon_proficiencies',
-    sa.Column('class_id', sa.UUID(), nullable=False),
-    sa.Column('weapon_category_code', sa.String(length=50), nullable=False),
-    sa.ForeignKeyConstraint(['class_id'], ['class_definitions.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['weapon_category_code'], ['weapon_categories.code'], ondelete='RESTRICT'),
-    sa.PrimaryKeyConstraint('class_id', 'weapon_category_code')
     )
     op.create_table('spell_class_lists',
     sa.Column('spell_id', sa.UUID(), nullable=False),
@@ -969,6 +1355,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_table('class_proficiency_grants')
+    op.drop_table('background_proficiency_grants')
+    op.drop_table('proficiency_grants')
+    op.drop_table('item_contents')
+    op.drop_table('containers')
+    op.drop_table('tools')
+    op.drop_table('armors')
+    op.drop_table('weapon_property_links')
+    op.drop_table('weapons')
     op.drop_table('character_spells')
     op.drop_table('character_spell_slots')
     op.drop_table('character_skills')
@@ -979,16 +1374,10 @@ def downgrade() -> None:
     op.drop_table('character_ability_scores')
     op.drop_table('subclass_definitions')
     op.drop_table('spell_class_lists')
-    op.drop_table('class_weapon_proficiencies')
-    op.drop_table('class_tool_proficiencies')
     op.drop_table('class_skills')
-    op.drop_table('class_saving_throws')
     op.drop_table('class_primary_abilities')
     op.drop_table('class_initial_equipment')
-    op.drop_table('class_armor_proficiencies')
     op.drop_table('characters')
-    op.drop_table('background_tool_proficiencies')
-    op.drop_table('background_skills')
     op.drop_table('background_initial_equipment')
     op.drop_table('background_ability_scores')
     op.drop_table('species_definitions')
@@ -1002,7 +1391,7 @@ def downgrade() -> None:
     op.drop_table('weapon_properties')
     op.drop_table('weapon_masteries')
     op.drop_table('weapon_categories')
-    op.drop_table('tool_proficiency_options')
+    op.drop_table('tool_types')
     op.drop_table('tool_categories')
     op.drop_table('spell_schools')
     op.drop_table('spell_definitions')
@@ -1015,6 +1404,7 @@ def downgrade() -> None:
     op.drop_table('movement_modes')
     op.drop_table('languages')
     op.drop_table('item_definitions')
+    op.drop_table('item_types')
     op.drop_table('feat_definitions')
     op.drop_table('feat_categories')
     op.drop_table('damage_types')

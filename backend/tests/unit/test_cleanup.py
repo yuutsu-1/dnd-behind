@@ -36,5 +36,31 @@ def test_no_legacy_symbols(path):
     assert offending == []
 
 
+# Phase 2: the spec's grep (tool_proficiency_options and the six old proficiency tables).
+PHASE2_FORBIDDEN = re.compile(
+    r"tool_proficiency_options|ToolProficiencyOption|class_saving_throws|class_armor_proficiencies"
+    r"|class_weapon_proficiencies|class_tool_proficiencies|background_skills|background_tool_proficiencies"
+)
+
+
+@pytest.mark.parametrize("path", sorted(_python_files("app", "alembic")))
+def test_no_phase2_legacy_symbols(path):
+    with open(path, encoding="utf-8") as handle:
+        offending = [
+            f"{os.path.relpath(path, BACKEND_DIR)}:{number}: {line.strip()}"
+            for number, line in enumerate(handle, start=1)
+            if PHASE2_FORBIDDEN.search(line)
+        ]
+    assert offending == []
+
+
+def test_item_definition_has_no_jsonb_column():
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from app.db.models.compendium import ItemDefinition
+
+    assert not any(isinstance(col.type, JSONB) for col in ItemDefinition.__table__.columns)
+
+
 def test_get_or_create_service_module_is_gone():
     assert not os.path.exists(os.path.join(BACKEND_DIR, "app", "services", "compendium.py"))

@@ -91,7 +91,14 @@ RESOURCES: list[Resource] = [
     _simple("recharge-types", models.RechargeType),
     _simple("action-types", models.ActionType),
     _simple("feat-categories", models.FeatCategory),
-    _simple("tool-proficiencies", models.ToolProficiencyOption),
+    _simple("item-types", models.ItemType),
+    Resource(
+        "tool-types", models.ToolType, schemas.ToolTypeCreate, schemas.ToolTypeUpdate, schemas.ToolTypeOut,
+        references=(
+            ("category_code", models.ToolCategory, "tool category"),
+            ("ability_code", models.Ability, "ability score"),
+        ),
+    ),
     Resource(
         "character-levels", models.CharacterLevel,
         schemas.CharacterLevelCreate, schemas.CharacterLevelUpdate, schemas.CharacterLevelOut,

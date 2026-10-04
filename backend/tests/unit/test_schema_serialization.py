@@ -1,5 +1,7 @@
 import uuid
 
+import pytest
+
 from app.schemas.campaign import CampaignOut, MemberOut
 from app.schemas.character import CharacterOut, InventoryItemOut
 from app.schemas.compendium import ClassOut, SubclassOut
@@ -233,6 +235,29 @@ class TestClassOutSkillsAndInitialEquipment:
     def test_no_longer_has_skill_pool_field(self):
         assert "skill_pool" not in ClassOut.model_fields
 
+    def test_proficiencies_come_from_grants(self):
+        assert {"proficiency_grants", "saving_throw_proficiencies"} <= set(ClassOut.model_fields)
+        for old in ("armor_proficiencies", "weapon_proficiencies", "tool_proficiencies"):
+            assert old not in ClassOut.model_fields
+
+    def test_grants_and_derived_saving_throws_are_serialized(self):
+        from app.db.models.compendium import ProficiencyGrant
+        from app.db.models.reference import Ability, ArmorCategory
+
+        klass = make_class(name="Fighter", proficiency_grants=[
+            ProficiencyGrant(id=uuid.uuid4(), saving_throw_ability_code="str",
+                             saving_throw_ability=Ability(code="str", name="Strength")),
+            ProficiencyGrant(id=uuid.uuid4(), armor_category_code="shield",
+                             armor_category=ArmorCategory(code="shield", name="Shield")),
+            ProficiencyGrant(id=uuid.uuid4(), saving_throw_ability_code="con",
+                             saving_throw_ability=Ability(code="con", name="Constitution")),
+        ])
+        out = ClassOut.model_validate(klass, from_attributes=True)
+        assert out.saving_throw_proficiencies == ["con", "str"]
+        assert [(g.kind, g.target_name) for g in out.proficiency_grants] == [
+            ("saving_throw", "Strength"), ("armor_category", "Shield"), ("saving_throw", "Constitution"),
+        ]
+
     def test_skills_and_initial_equipment_populated_from_relationships(self):
         athletics = make_skill(code="athletics", name="Athletics", ability_code="str")
         arcana = make_skill(code="arcana", name="Arcana", ability_code="int")
@@ -249,6 +274,44 @@ class TestClassOutSkillsAndInitialEquipment:
         assert out.initial_equipment[0].option == "A"
         assert out.initial_equipment[0].quantity == 2
 
+
+class TestClassCreateGrants:
+    def _payload(self, **overrides):
+        payload = dict(name="Fighter", hit_die=10, primary_ability=["str"])
+        payload.update(overrides)
+        return payload
+
+    def test_old_proficiency_fields_are_gone(self):
+        from app.schemas.compendium import ClassCreate
+
+        for old in ("saving_throw_proficiencies", "armor_proficiencies", "weapon_proficiencies", "tool_proficiencies"):
+            assert old not in ClassCreate.model_fields
+        assert "proficiency_grants" in ClassCreate.model_fields
+
+    def test_accepts_any_kind(self):
+        from app.schemas.compendium import ClassCreate
+
+        data = ClassCreate(**self._payload(proficiency_grants=[
+            {"saving_throw_ability_code": "str"}, {"weapon_category_code": "simple"},
+            {"armor_category_code": "light"}, {"tool_type_code": "lute"}, {"tool_category_code": "gaming_set"},
+            {"skill_code": "stealth"}, {"language_code": "elvish"},
+        ]))
+        assert len(data.proficiency_grants) == 7
+
+    @pytest.mark.parametrize("grants", [
+        [{"skill_code": "stealth"}, {"skill_code": "stealth"}],
+        [{"skill_code": "stealth", "language_code": "elvish"}],
+        [{}],
+        [{"weapon_item_id": str(uuid.uuid4())}],
+        [{"required_weapon_property_code": "light"}],
+    ])
+    def test_invalid_descriptors_are_422(self, grants):
+        from pydantic import ValidationError
+
+        from app.schemas.compendium import ClassCreate
+
+        with pytest.raises(ValidationError):
+            ClassCreate(**self._payload(proficiency_grants=grants))
 
 class TestSubclassOutClassName:
     def test_populated_from_class_def(self):

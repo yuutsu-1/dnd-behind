@@ -1,4 +1,4 @@
-"""Metadata-level checks for the SRD reference tables (phase 1 of the model redesign)."""
+"""Metadata-level checks for the SRD reference tables (phases 1 and 2 of the model redesign)."""
 import pytest
 from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -11,7 +11,7 @@ CODE_TABLES = [
     "alignments", "languages", "senses", "movement_modes",
     "weapon_categories", "weapon_properties", "weapon_masteries", "armor_categories", "tool_categories",
     "spell_schools", "recharge_types", "action_types",
-    "challenge_ratings", "feat_categories", "tool_proficiency_options",
+    "challenge_ratings", "feat_categories", "item_types", "tool_types",
 ]
 KEYED_TABLES = {"character_levels": "level", "point_buy_costs": "score"}
 REFERENCE_TABLES = CODE_TABLES + list(KEYED_TABLES)
@@ -41,10 +41,44 @@ def _unique_column_sets(table_name) -> list[set[str]]:
     return sets
 
 
-def test_there_are_23_reference_tables():
-    assert len(REFERENCE_TABLES) == 23
+def test_there_are_24_reference_tables():
+    from app.db.models.reference import REFERENCE_TABLE_NAMES
+
+    assert len(REFERENCE_TABLES) == 24
+    assert set(REFERENCE_TABLE_NAMES) == set(REFERENCE_TABLES)
+    assert len(REFERENCE_TABLE_NAMES) == 24
     for name in REFERENCE_TABLES:
         _table(name)
+
+
+def test_tool_proficiency_options_is_gone():
+    import app.db.models as models
+    import app.db.models.reference as reference
+
+    assert "tool_proficiency_options" not in Base.metadata.tables
+    assert not hasattr(reference, "ToolProficiencyOption")
+    assert not hasattr(models, "ToolProficiencyOption")
+
+
+def test_item_types_has_no_extra_columns():
+    assert set(_table("item_types").c.keys()) == {
+        "code", "name", "description", "source", "is_homebrew", "created_by",
+    }
+
+
+def test_tool_types_foreign_keys():
+    table = _table("tool_types")
+    assert set(table.c.keys()) == {
+        "code", "name", "description", "source", "is_homebrew", "created_by", "category_code", "ability_code",
+    }
+    category = _fk("tool_types", "category_code")
+    assert category.target_fullname == "tool_categories.code"
+    assert category.ondelete == "RESTRICT"
+    assert table.c.category_code.nullable is True
+    ability = _fk("tool_types", "ability_code")
+    assert ability.target_fullname == "ability_scores.code"
+    assert ability.ondelete == "RESTRICT"
+    assert table.c.ability_code.nullable is False
 
 
 @pytest.mark.parametrize("name", CODE_TABLES)
@@ -152,3 +186,5 @@ def test_campaign_homebrew_rules_resource_table_is_restricted_to_reference_table
     for name in REFERENCE_TABLES:
         assert f"'{name}'" in checks
     assert "'condition_implications'" not in checks
+    assert "'tool_proficiency_options'" not in checks
+    assert "'item_types'" in checks and "'tool_types'" in checks

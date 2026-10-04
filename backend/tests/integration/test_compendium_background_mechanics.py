@@ -2,14 +2,14 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.compendium import create_background, get_background, update_background
 from app.db.models.compendium import (
     BackgroundInitialEquipment,
+    ProficiencyGrant,
     background_ability_scores,
-    background_skills,
-    background_tool_proficiencies,
+    background_proficiency_grants,
 )
 from app.db.models.compendium import BackgroundDefinition
 from app.db.models.reference import Skill
@@ -29,14 +29,28 @@ from tests.integration.conftest import (
 )
 
 
+def _grants(skills=("history", "persuasion"), tools=({"tool_category_code": "gaming_set"},)) -> list[dict]:
+    return [{"skill_code": code} for code in skills] + list(tools)
+
+
+async def _grant_count(db_session) -> int:
+    return await db_session.scalar(select(func.count()).select_from(ProficiencyGrant))
+
+
+def _tool_grants(out: BackgroundOut) -> list[tuple[str, str]]:
+    return sorted(
+        (g.kind, g.tool_type_code or g.tool_category_code)
+        for g in out.proficiency_grants if g.kind in ("tool", "tool_category")
+    )
+
+
 def _noble_kwargs(feat_id: uuid.UUID, item_ids: list[uuid.UUID], **overrides) -> dict:
     defaults = dict(
         name=f"Noble-{uuid.uuid4().hex[:10]}",
         description="Born to a family of wealth and influence.",
         ability_scores=["str", "int", "cha"],
         feat_id=feat_id,
-        skills=["history", "persuasion"],
-        tool_proficiencies=["gaming_set"],
+        proficiency_grants=_grants(),
         initial_equipment=[
             BackgroundInitialEquipmentCreate(item_id=item_ids[0], option="A", quantity=1),
             BackgroundInitialEquipmentCreate(item_id=item_ids[1], option="A", quantity=1),
@@ -65,24 +79,31 @@ class TestCreateBackgroundNobleCase:
         assert set(out.ability_scores) == {"str", "int", "cha"}
         assert obj.feat_id == feat.id
         assert obj.feat_name == "Skilled"
-        assert {(s.code, s.ability_code) for s in out.skills} == {("history", "int"), ("persuasion", "cha")}
-        assert out.tool_proficiencies == ["gaming_set"]
+        assert [(s.code, s.ability_code) for s in out.skills] == [("history", "int"), ("persuasion", "cha")]
+        assert _tool_grants(out) == [("tool_category", "gaming_set")]
         assert len(obj.initial_equipment) == 3
         assert {e.item_name for e in obj.initial_equipment} == {"Fine Clothes", "Signet Ring", "Purse"}
 
 
-    async def test_multiple_tool_proficiency_options_are_persisted(self, db_session):
+    async def test_tool_choice_is_a_single_tool_category_grant(self, db_session):
+        # Phase 2: "choose one" is expressed by a `tool_category` grant; several tool
+        # grants are all fixed (the old "several tools = choose one" rule is gone).
         creator = await seed_user(db_session)
         feat = await seed_feat(db_session)
         items = [await seed_item(db_session) for _ in range(3)]
-        options = ["gaming_set", "musical_instrument", "herbalism_kit"]
 
-        data = BackgroundCreate(
-            **_noble_kwargs(feat.id, [i.id for i in items], tool_proficiencies=options)
-        )
-        obj = await create_background(data, current_user=creator, db=db_session)
+        choice = BackgroundCreate(**_noble_kwargs(
+            feat.id, [i.id for i in items], proficiency_grants=_grants(tools=[{"tool_category_code": "musical_instrument"}]),
+        ))
+        out = BackgroundOut.model_validate(await create_background(choice, current_user=creator, db=db_session))
+        assert _tool_grants(out) == [("tool_category", "musical_instrument")]
 
-        assert {t.code for t in obj.tool_proficiencies} == set(options)
+        fixed = BackgroundCreate(**_noble_kwargs(
+            feat.id, [i.id for i in items],
+            proficiency_grants=_grants(tools=[{"tool_type_code": "herbalism_kit"}, {"tool_type_code": "thieves_tools"}]),
+        ))
+        out = BackgroundOut.model_validate(await create_background(fixed, current_user=creator, db=db_session))
+        assert _tool_grants(out) == [("tool", "herbalism_kit"), ("tool", "thieves_tools")]
 
     async def test_response_serializes_when_items_not_in_session(self, db_session):
         # Regression: lazy `item` load during response serialization raised
@@ -112,8 +133,7 @@ class TestCreateBackgroundValidation:
                 name="Bad",
                 ability_scores=["str", "int"],
                 feat_id=uuid.uuid4(),
-                skills=["history", "persuasion"],
-                tool_proficiencies=["gaming_set"],
+                proficiency_grants=_grants(),
             )
 
     async def test_skills_duplicate_rejected_by_schema(self):
@@ -122,8 +142,7 @@ class TestCreateBackgroundValidation:
                 name="Bad",
                 ability_scores=["str", "int", "cha"],
                 feat_id=uuid.uuid4(),
-                skills=["history", "history"],
-                tool_proficiencies=["gaming_set"],
+                proficiency_grants=_grants(skills=["history", "history"]),
             )
 
     async def test_nonexistent_feat_id_is_rejected_with_400(self, db_session):
@@ -183,15 +202,16 @@ class TestBackgroundCascadeDelete:
         )
         assert ability_link_result.first() is None
 
-        skill_link_result = await db_session.execute(
-            select(background_skills).where(background_skills.c.background_id == background_id)
+        grant_ids = [g.id for g in background.proficiency_grants]
+        grant_link_result = await db_session.execute(
+            select(background_proficiency_grants).where(background_proficiency_grants.c.background_id == background_id)
         )
-        assert skill_link_result.first() is None
-
-        tool_link_result = await db_session.execute(
-            select(background_tool_proficiencies).where(background_tool_proficiencies.c.background_id == background_id)
+        assert grant_link_result.first() is None
+        # The grants themselves are shared and never deleted with an owner.
+        remaining = await db_session.scalar(
+            select(func.count()).select_from(ProficiencyGrant).where(ProficiencyGrant.id.in_(grant_ids))
         )
-        assert tool_link_result.first() is None
+        assert remaining == 3
 
 
 class TestSeedBackgroundInitialEquipmentHelper:
@@ -225,7 +245,7 @@ class TestGetBackground:
 
 
 class TestUpdateBackground:
-    async def test_partial_update_of_tool_proficiency(self, db_session):
+    async def test_partial_update_replaces_the_grants(self, db_session):
         creator = await seed_user(db_session)
         feat = await seed_feat(db_session)
         fine_clothes = await seed_item(db_session)
@@ -236,11 +256,22 @@ class TestUpdateBackground:
         )
         obj = await create_background(data, current_user=creator, db=db_session)
 
+        old_grant_ids = {g.id for g in obj.proficiency_grants}
         updated = await update_background(
-            obj.id, BackgroundUpdate(tool_proficiencies=["musical_instrument"]), current_user=creator, db=db_session
+            obj.id,
+            BackgroundUpdate(proficiency_grants=_grants(
+                skills=["insight", "persuasion"], tools=[{"tool_category_code": "musical_instrument"}],
+            )),
+            current_user=creator, db=db_session,
         )
 
-        assert [t.code for t in updated.tool_proficiencies] == ["musical_instrument"]
+        out = BackgroundOut.model_validate(updated)
+        assert _tool_grants(out) == [("tool_category", "musical_instrument")]
+        assert [s.code for s in out.skills] == ["insight", "persuasion"]
+        # Old grants left the background but stay in the database.
+        assert await db_session.scalar(
+            select(func.count()).select_from(ProficiencyGrant).where(ProficiencyGrant.id.in_(old_grant_ids))
+        ) == 3
         # Unrelated fields untouched.
         assert {a.code for a in updated.ability_scores} == {"str", "int", "cha"}
 
@@ -365,8 +396,9 @@ class TestBackgroundCodes:
     @pytest.mark.parametrize("field,value", [
         ("ability_scores", ["STR", "int", "cha"]),
         ("ability_scores", ["str", "int", "luck"]),
-        ("skills", ["history", "psionics"]),
-        ("tool_proficiencies", ["dice_set"]),
+        ("proficiency_grants", _grants(skills=["history", "psionics"])),
+        ("proficiency_grants", _grants(tools=[{"tool_type_code": "lockpicks"}])),
+        ("proficiency_grants", _grants(tools=[{"tool_category_code": "dice_set"}])),
     ])
     async def test_create_with_unknown_code_is_400_and_writes_nothing(self, db_session, field, value):
         creator = await seed_user(db_session)
@@ -374,12 +406,14 @@ class TestBackgroundCodes:
         items = [await seed_item(db_session) for _ in range(3)]
         await db_session.commit()
         data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], **{field: value}))
+        grants_before = await _grant_count(db_session)
 
         with pytest.raises(HTTPException) as exc_info:
             await create_background(data, current_user=creator, db=db_session)
 
         assert exc_info.value.status_code == 400
         assert await _background_count(db_session, data.name) == 0
+        assert await _grant_count(db_session) == grants_before
 
     async def test_invisible_homebrew_skill_is_400(self, db_session):
         author = await seed_user(db_session)
@@ -387,7 +421,9 @@ class TestBackgroundCodes:
         hidden = await seed_reference(db_session, Skill, author=author, ability_code="int")
         feat = await seed_feat(db_session)
         items = [await seed_item(db_session) for _ in range(3)]
-        data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], skills=["history", hidden.code]))
+        data = BackgroundCreate(**_noble_kwargs(
+            feat.id, [i.id for i in items], proficiency_grants=_grants(skills=["history", hidden.code]),
+        ))
         await db_session.commit()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -399,16 +435,18 @@ class TestBackgroundCodes:
         mine = await seed_reference(db_session, Skill, author=author, ability_code="int")
         feat = await seed_feat(db_session)
         items = [await seed_item(db_session) for _ in range(3)]
-        data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], skills=["history", mine.code]))
+        data = BackgroundCreate(**_noble_kwargs(
+            feat.id, [i.id for i in items], proficiency_grants=_grants(skills=["history", mine.code]),
+        ))
 
         obj = await create_background(data, current_user=author, db=db_session)
         assert {s.code for s in obj.skills} == {"history", mine.code}
 
     @pytest.mark.parametrize("update", [
         BackgroundUpdate(ability_scores=["dex", "wis", "luck"]),
-        BackgroundUpdate(skills=["history", "psionics"]),
-        BackgroundUpdate(tool_proficiencies=["dice_set"]),
-        BackgroundUpdate(name="Renamed", skills=["nope", "history"]),
+        BackgroundUpdate(proficiency_grants=_grants(skills=["history", "psionics"])),
+        BackgroundUpdate(proficiency_grants=_grants(tools=[{"tool_type_code": "dice"}])),
+        BackgroundUpdate(name="Renamed", proficiency_grants=_grants(skills=["nope", "history"])),
     ])
     async def test_update_with_unknown_code_is_400_and_changes_nothing(self, db_session, update):
         creator = await seed_user(db_session)
@@ -427,7 +465,7 @@ class TestBackgroundCodes:
         assert fetched.name == original_name
         assert set(fetched.ability_scores) == {"str", "int", "cha"}
         assert {s.code for s in fetched.skills} == {"history", "persuasion"}
-        assert fetched.tool_proficiencies == ["gaming_set"]
+        assert _tool_grants(fetched) == [("tool_category", "gaming_set")]
 
     async def test_update_with_valid_codes(self, db_session):
         creator = await seed_user(db_session)
@@ -437,6 +475,7 @@ class TestBackgroundCodes:
             BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items])), current_user=creator, db=db_session
         )
         updated = await update_background(
-            obj.id, BackgroundUpdate(skills=["insight", "religion"]), current_user=creator, db=db_session
+            obj.id, BackgroundUpdate(proficiency_grants=_grants(skills=["insight", "religion"])),
+            current_user=creator, db=db_session,
         )
         assert {s.code for s in BackgroundOut.model_validate(updated).skills} == {"insight", "religion"}

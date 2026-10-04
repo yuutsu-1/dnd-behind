@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text, func,
+    Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Numeric, String, Table, Text,
+    UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -12,11 +14,13 @@ from app.db.models.reference import (
     CODE_LENGTH,
     Ability,
     ArmorCategory,
+    Language,
     Skill,
-    ToolProficiencyOption,
+    ToolCategory,
+    ToolType,
     WeaponCategory,
+    WeaponProperty,
 )
-
 
 
 def _code_fk(target: str) -> ForeignKey:
@@ -28,34 +32,6 @@ class_primary_abilities = Table(
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
     Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
-)
-
-class_saving_throws = Table(
-    "class_saving_throws",
-    Base.metadata,
-    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
-)
-
-class_armor_proficiencies = Table(
-    "class_armor_proficiencies",
-    Base.metadata,
-    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("armor_category_code", String(CODE_LENGTH), _code_fk("armor_categories.code"), primary_key=True),
-)
-
-class_weapon_proficiencies = Table(
-    "class_weapon_proficiencies",
-    Base.metadata,
-    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("weapon_category_code", String(CODE_LENGTH), _code_fk("weapon_categories.code"), primary_key=True),
-)
-
-class_tool_proficiencies = Table(
-    "class_tool_proficiencies",
-    Base.metadata,
-    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("tool_proficiency_code", String(CODE_LENGTH), _code_fk("tool_proficiency_options.code"), primary_key=True),
 )
 
 spell_class_lists = Table(
@@ -79,18 +55,108 @@ background_ability_scores = Table(
     Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
 )
 
-background_skills = Table(
-    "background_skills",
+
+# kind -> (target column, relationship holding the target row). `required_weapon_property_code`
+# is a modifier of `weapon_category`, not a target of its own.
+GRANT_TARGETS: dict[str, tuple[str, str]] = {
+    "weapon_category": ("weapon_category_code", "weapon_category"),
+    "armor_category": ("armor_category_code", "armor_category"),
+    "tool": ("tool_type_code", "tool_type"),
+    "tool_category": ("tool_category_code", "tool_category"),
+    "skill": ("skill_code", "skill"),
+    "saving_throw": ("saving_throw_ability_code", "saving_throw_ability"),
+    "language": ("language_code", "language"),
+}
+GRANT_TARGET_COLUMNS: tuple[str, ...] = tuple(column for column, _ in GRANT_TARGETS.values())
+# Every column that identifies a grant (the unique key).
+GRANT_KEY_COLUMNS: tuple[str, ...] = (*GRANT_TARGET_COLUMNS, "required_weapon_property_code")
+
+
+def _grant_target(target: str):
+    return mapped_column(String(CODE_LENGTH), _code_fk(target), nullable=True)
+
+
+class ProficiencyGrant(Base):
+    """One reusable proficiency: exactly one target column is filled, and the same
+    target is always the same row (UNIQUE NULLS NOT DISTINCT). Weapon/armor categories
+    mean every weapon/armor of that category (filtered by `required_weapon_property_code`
+    if set); `tool_category` means "choose one tool of the category"; the rest are fixed.
+    Grants are shared by classes and backgrounds and are never deleted when orphaned."""
+
+    __tablename__ = "proficiency_grants"
+    __table_args__ = (
+        CheckConstraint(
+            f"num_nonnulls({', '.join(GRANT_TARGET_COLUMNS)}) = 1",
+            name="ck_proficiency_grants_single_target",
+        ),
+        CheckConstraint(
+            "required_weapon_property_code IS NULL OR weapon_category_code IS NOT NULL",
+            name="ck_proficiency_grants_required_property",
+        ),
+        UniqueConstraint(
+            *GRANT_KEY_COLUMNS, name="uq_proficiency_grants_target", postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    weapon_category_code: Mapped[str | None]          = _grant_target("weapon_categories.code")
+    required_weapon_property_code: Mapped[str | None] = _grant_target("weapon_properties.code")
+    armor_category_code: Mapped[str | None]           = _grant_target("armor_categories.code")
+    tool_type_code: Mapped[str | None]                = _grant_target("tool_types.code")
+    tool_category_code: Mapped[str | None]            = _grant_target("tool_categories.code")
+    skill_code: Mapped[str | None]                    = _grant_target("skills.code")
+    saving_throw_ability_code: Mapped[str | None]     = _grant_target("ability_scores.code")
+    language_code: Mapped[str | None]                 = _grant_target("languages.code")
+
+    # Loaded with the grant (one query with outer joins), so names never cost extra queries.
+    weapon_category: Mapped[WeaponCategory | None]          = relationship(lazy="joined")
+    required_weapon_property: Mapped[WeaponProperty | None] = relationship(lazy="joined")
+    armor_category: Mapped[ArmorCategory | None]            = relationship(lazy="joined")
+    tool_type: Mapped[ToolType | None]                      = relationship(lazy="joined")
+    tool_category: Mapped[ToolCategory | None]              = relationship(lazy="joined")
+    skill: Mapped[Skill | None]                             = relationship(lazy="joined")
+    saving_throw_ability: Mapped[Ability | None]            = relationship(lazy="joined")
+    language: Mapped[Language | None]                       = relationship(lazy="joined")
+
+    @property
+    def kind(self) -> str | None:
+        for kind, (column, _) in GRANT_TARGETS.items():
+            if getattr(self, column) is not None:
+                return kind
+        return None
+
+    @property
+    def target_code(self) -> str | None:
+        kind = self.kind
+        return getattr(self, GRANT_TARGETS[kind][0]) if kind else None
+
+    @property
+    def target_name(self) -> str | None:
+        kind = self.kind
+        target = getattr(self, GRANT_TARGETS[kind][1]) if kind else None
+        return target.name if target is not None else None
+
+    @property
+    def required_weapon_property_name(self) -> str | None:
+        prop = self.required_weapon_property
+        return prop.name if prop is not None else None
+
+
+class_proficiency_grants = Table(
+    "class_proficiency_grants",
     Base.metadata,
-    Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("skill_code", String(CODE_LENGTH), _code_fk("skills.code"), primary_key=True),
+    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
+    Column("grant_id", UUID(as_uuid=True), _code_fk("proficiency_grants.id"), primary_key=True),
 )
 
-background_tool_proficiencies = Table(
-    "background_tool_proficiencies",
+background_proficiency_grants = Table(
+    "background_proficiency_grants",
     Base.metadata,
-    Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("tool_proficiency_code", String(CODE_LENGTH), _code_fk("tool_proficiency_options.code"), primary_key=True),
+    Column(
+        "background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("grant_id", UUID(as_uuid=True), _code_fk("proficiency_grants.id"), primary_key=True),
 )
 
 
@@ -153,17 +219,8 @@ class ClassDefinition(Base):
     primary_ability: Mapped[list[Ability]] = relationship(
         secondary=class_primary_abilities, lazy="selectin"
     )
-    saving_throw_proficiencies: Mapped[list[Ability]] = relationship(
-        secondary=class_saving_throws, lazy="selectin"
-    )
-    armor_proficiencies: Mapped[list[ArmorCategory]] = relationship(
-        secondary=class_armor_proficiencies, lazy="selectin"
-    )
-    weapon_proficiencies: Mapped[list[WeaponCategory]] = relationship(
-        secondary=class_weapon_proficiencies, lazy="selectin"
-    )
-    tool_proficiencies: Mapped[list[ToolProficiencyOption]] = relationship(
-        secondary=class_tool_proficiencies, lazy="selectin"
+    proficiency_grants: Mapped[list[ProficiencyGrant]] = relationship(
+        secondary=class_proficiency_grants, lazy="selectin"
     )
     skills: Mapped[list[Skill]] = relationship(
         secondary=class_skills, lazy="selectin"
@@ -172,6 +229,13 @@ class ClassDefinition(Base):
     initial_equipment: Mapped[list["ClassInitialEquipment"]] = relationship(
         back_populates="class_def", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def saving_throw_proficiencies(self) -> list[str]:
+        """Codes of the `saving_throw` grants, sorted."""
+        return sorted(
+            g.saving_throw_ability_code for g in self.proficiency_grants if g.saving_throw_ability_code
+        )
 
 
 class SubclassDefinition(Base):
@@ -208,12 +272,9 @@ class BackgroundDefinition(Base):
     ability_scores: Mapped[list[Ability]] = relationship(
         secondary=background_ability_scores, lazy="selectin"
     )
-    skills: Mapped[list[Skill]] = relationship(
-        secondary=background_skills, lazy="selectin"
-    )
     feat: Mapped["FeatDefinition"] = relationship(lazy="selectin")
-    tool_proficiencies: Mapped[list[ToolProficiencyOption]] = relationship(
-        secondary=background_tool_proficiencies, lazy="selectin"
+    proficiency_grants: Mapped[list[ProficiencyGrant]] = relationship(
+        secondary=background_proficiency_grants, lazy="selectin"
     )
     initial_equipment: Mapped[list["BackgroundInitialEquipment"]] = relationship(
         back_populates="background", cascade="all, delete-orphan", lazy="selectin"
@@ -222,6 +283,12 @@ class BackgroundDefinition(Base):
     @property
     def feat_name(self) -> str | None:
         return self.feat.name if self.feat else None
+
+    @property
+    def skills(self) -> list[Skill]:
+        """Skills of the `skill` grants, sorted by name (the background's fixed skills)."""
+        skills = [g.skill for g in self.proficiency_grants if g.skill_code is not None]
+        return sorted(skills, key=lambda skill: (skill.name, skill.code))
 
 
 class FeatDefinition(Base):
@@ -267,24 +334,40 @@ class SpellDefinition(Base):
     )
 
 
+def _sub_row():
+    """1:1 sub-row owned by the item (the FK cascades in the database)."""
+    return relationship(uselist=False, cascade="all, delete-orphan", passive_deletes=True)
+
+
 class ItemDefinition(Base):
+    """Common base of every item. Values are per unit (ammunition: pack price/weight
+    divided by the pack size); `cost_gp` is in gold pieces. Type-specific data lives in
+    the 1:1 tables of app/db/models/items.py."""
+
     __tablename__ = "item_definitions"
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str]               = mapped_column(String(100), nullable=False)
-    item_type: Mapped[str]          = mapped_column(String(20), nullable=False)
-    subtype: Mapped[str | None]     = mapped_column(String(30))
-    rarity: Mapped[str]             = mapped_column(String(15), nullable=False, default="common")
-    requires_attunement: Mapped[bool] = mapped_column(Boolean, default=False)
-    attunement_prerequisite: Mapped[str | None] = mapped_column(Text)
-    weight: Mapped[float | None]    = mapped_column(Float)
-    cost_gp: Mapped[float | None]   = mapped_column(Float)
+    item_type_code: Mapped[str]     = mapped_column(
+        String(CODE_LENGTH), ForeignKey("item_types.code", ondelete="RESTRICT"), nullable=False
+    )
+    cost_gp: Mapped[Decimal | None]   = mapped_column(Numeric(12, 4))
+    weight_lb: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     description: Mapped[str | None] = mapped_column(Text)
-    properties: Mapped[dict]        = mapped_column(JSONB, nullable=False, default=dict)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Sub-rows are loaded explicitly (app/services/items.py), never implicitly.
+    weapon: Mapped["Weapon | None"]       = _sub_row()
+    armor: Mapped["Armor | None"]         = _sub_row()
+    tool: Mapped["Tool | None"]           = _sub_row()
+    container: Mapped["Container | None"] = _sub_row()
+    contents: Mapped[list["ItemContent"]] = relationship(
+        foreign_keys="ItemContent.pack_item_id", cascade="all, delete-orphan", passive_deletes=True,
+        order_by="ItemContent.item_id",
+    )
 
 
 class ClassInitialEquipment(Base):

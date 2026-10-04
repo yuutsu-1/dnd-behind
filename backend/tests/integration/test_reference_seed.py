@@ -28,7 +28,8 @@ EXPECTED_COUNTS = {
     "character_levels": 20,
     "challenge_ratings": 34,
     "point_buy_costs": 8,
-    "tool_proficiency_options": 25,
+    "item_types": 7,
+    "tool_types": 37,
 }
 
 SEEDED_REFERENCE_TABLES = [t for t in EXPECTED_COUNTS if t != "condition_implications"]
@@ -147,14 +148,64 @@ async def test_condition_implications(db_session):
     }
 
 
-async def test_tool_proficiency_options_include_generic_sets(db_session):
-    codes = set((await db_session.execute(text("SELECT code FROM tool_proficiency_options"))).scalars())
-    assert {"alchemists_supplies", "thieves_tools", "gaming_set", "musical_instrument", "woodcarvers_tools"} <= codes
+async def test_item_types(db_session):
+    codes = set((await db_session.execute(text("SELECT code FROM item_types"))).scalars())
+    assert codes == {"weapon", "armor", "tool", "ammunition", "adventuring_gear", "pack", "currency"}
+
+
+async def test_tool_types_by_category(db_session):
+    rows = (await db_session.execute(text(
+        "SELECT category_code, count(*) FROM tool_types WHERE source = 'srd' GROUP BY category_code"
+    ))).all()
+    assert dict(rows) == {"artisans_tools": 17, "gaming_set": 4, "musical_instrument": 10, None: 6}
+
+
+async def test_tool_types_spot_values(db_session):
+    rows = {
+        r.code: (r.name, r.category_code, r.ability_code)
+        for r in (await db_session.execute(text("SELECT * FROM tool_types"))).all()
+    }
+    assert rows["thieves_tools"] == ("Thieves' Tools", None, "dex")
+    assert rows["lute"] == ("Lute", "musical_instrument", "cha")
+    assert rows["dice_set"] == ("Dice Set", "gaming_set", "wis")
+    assert rows["alchemists_supplies"] == ("Alchemist's Supplies", "artisans_tools", "int")
+    assert rows["pan_flute"] == ("Pan Flute", "musical_instrument", "cha")
+    assert rows["three_dragon_ante_set"] == ("Three-Dragon Ante Set", "gaming_set", "wis")
+    assert {code for code, (_, category, _) in rows.items() if category is None} == {
+        "disguise_kit", "forgery_kit", "herbalism_kit", "navigators_tools", "poisoners_kit", "thieves_tools",
+    }
+    # Every code is snake_case without apostrophes.
+    assert all(code == code.lower() and "'" not in code and " " not in code for code in rows)
+
+
+async def test_tool_types_abilities_follow_the_srd(db_session):
+    rows = dict((await db_session.execute(text("SELECT code, ability_code FROM tool_types"))).all())
+    assert {c for c, a in rows.items() if a == "str"} == {"carpenters_tools", "masons_tools", "smiths_tools"}
+    assert {c for c, a in rows.items() if a == "cha"} == {
+        "disguise_kit", "bagpipes", "drum", "dulcimer", "flute", "horn", "lute", "lyre", "pan_flute", "shawm", "viol",
+    }
+    assert {c for c, a in rows.items() if a == "wis"} == {
+        "cartographers_tools", "cooks_utensils", "painters_supplies", "navigators_tools",
+        "dice_set", "dragonchess_set", "playing_card_set", "three_dragon_ante_set",
+    }
+    assert {c for c, a in rows.items() if a == "int"} == {
+        "alchemists_supplies", "brewers_supplies", "glassblowers_tools", "jewelers_tools", "potters_tools",
+        "herbalism_kit", "poisoners_kit",
+    }
+    assert {c for c, a in rows.items() if a == "dex"} == {
+        "calligraphers_supplies", "cobblers_tools", "leatherworkers_tools", "tinkers_tools", "weavers_tools",
+        "woodcarvers_tools", "forgery_kit", "thieves_tools",
+    }
 
 
 async def test_legacy_tables_do_not_exist(db_session):
-    for name in ("ability_score_options", "skill_definitions", "armor_proficiency_options", "weapon_proficiency_options"):
-        assert await _scalar(db_session, "SELECT to_regclass(:n) IS NULL", n=name)
+    for name in (
+        "ability_score_options", "skill_definitions", "armor_proficiency_options", "weapon_proficiency_options",
+        "tool_proficiency_options", "class_saving_throws", "class_armor_proficiencies",
+        "class_weapon_proficiencies", "class_tool_proficiencies", "background_skills",
+        "background_tool_proficiencies",
+    ):
+        assert await _scalar(db_session, "SELECT to_regclass(:n) IS NULL", n=name), name
     assert await _scalar(db_session, "SELECT count(*) FROM pg_type WHERE typname = 'creaturesize'") == 0
 
 

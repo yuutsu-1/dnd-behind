@@ -3,8 +3,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.enums import AbilityScore, CreatureSize
-
 
 class FeatureGrantOut(BaseModel):
     model_config = {"from_attributes": True}
@@ -39,7 +37,7 @@ class SpeciesOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
-    size: CreatureSize
+    size_code: str
     base_speed: int
     source: str
     is_homebrew: bool
@@ -48,7 +46,8 @@ class SpeciesOut(BaseModel):
 class SpeciesCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
-    size: CreatureSize = CreatureSize.medium
+    # Code of a `sizes` row visible to the caller (400 otherwise).
+    size_code: str = "medium"
     base_speed: int = 30
 
 
@@ -58,17 +57,19 @@ def _pluck(v: list) -> list: #pra casos das lookup tables, deixa a vida mais fá
     return v
 
 
+def _pluck_codes(v: list) -> list:
+    """Reference rows (ORM) -> their codes; plain lists of codes pass through."""
+    if v and hasattr(v[0], "code"):
+        return [item.code for item in v]
+    return v
+
+
 class SkillOut(BaseModel):
     model_config = {"from_attributes": True}
 
-    id: uuid.UUID
+    code: str
     name: str
-    ability_score: str
-
-
-class SkillCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    ability_score: AbilityScore
+    ability_code: str
 
 
 class ClassInitialEquipmentOut(BaseModel):
@@ -95,8 +96,10 @@ class ClassOut(BaseModel):
     name: str
     description: str | None
     hit_die: int
-    primary_ability: list[AbilityScore]
-    saving_throw_proficiencies: list[AbilityScore]
+    # Codes of `ability_scores`.
+    primary_ability: list[str]
+    saving_throw_proficiencies: list[str]
+    # Codes of `armor_categories`, `weapon_categories` and `tool_proficiency_options`.
     armor_proficiencies: list[str]
     weapon_proficiencies: list[str]
     tool_proficiencies: list[str]
@@ -109,31 +112,33 @@ class ClassOut(BaseModel):
     source: str
     is_homebrew: bool
 
-    @field_validator("primary_ability", "saving_throw_proficiencies", mode="before")
+    @field_validator(
+        "primary_ability", "saving_throw_proficiencies",
+        "armor_proficiencies", "weapon_proficiencies", "tool_proficiencies",
+        mode="before",
+    )
     @classmethod
-    def _ability_names(cls, v: list) -> list:
-        return _pluck(v)
-
-    @field_validator("armor_proficiencies", "weapon_proficiencies", "tool_proficiencies", mode="before")
-    @classmethod
-    def _proficiency_names(cls, v: list) -> list:
-        return _pluck(v)
+    def _codes(cls, v: list) -> list:
+        return _pluck_codes(v)
 
 
 class ClassCreate(BaseModel):
+    """Every reference field takes codes that must exist and be visible to the caller
+    (400 otherwise; same message whether the code is unknown or invisible)."""
+
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
     hit_die: int
-    primary_ability: list[AbilityScore]
-    saving_throw_proficiencies: list[AbilityScore]
+    primary_ability: list[str]
+    saving_throw_proficiencies: list[str]
     armor_proficiencies: list[str] = Field(default_factory=list)
     weapon_proficiencies: list[str] = Field(default_factory=list)
     tool_proficiencies: list[str] = Field(default_factory=list)
     skill_choices: int = 2
-    skills: list[SkillCreate] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     initial_equipment: list[ClassInitialEquipmentCreate] = Field(default_factory=list)
     subclass_level: int = 3
-    spell_ability: AbilityScore | None = None
+    spell_ability: str | None = None
     spellcasting_type: str | None = None
 
 
@@ -183,8 +188,7 @@ def _validate_ability_scores_cardinality(v: list) -> list:
 def _validate_skills_cardinality(v: list) -> list:
     if len(v) != 2:
         raise ValueError("skills must have exactly 2 entries")
-    names = [s.name for s in v]
-    if len(set(names)) != len(names):
+    if len(set(v)) != len(v):
         raise ValueError("skills must not contain duplicates")
     return v
 
@@ -203,33 +207,32 @@ class BackgroundOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
-    ability_scores: list[AbilityScore]
+    # Codes of `ability_scores`.
+    ability_scores: list[str]
     feat_id: uuid.UUID
     feat_name: str
     skills: list[SkillOut]
-    # One entry = fixed proficiency; several = the character picks one.
+    # Codes of `tool_proficiency_options`. One entry = fixed proficiency; several =
+    # the character picks one.
     tool_proficiencies: list[str]
     initial_equipment: list[BackgroundInitialEquipmentOut]
     source: str
     is_homebrew: bool
 
-    @field_validator("ability_scores", mode="before")
+    @field_validator("ability_scores", "tool_proficiencies", mode="before")
     @classmethod
-    def _ability_score_names(cls, v: list) -> list:
-        return _pluck(v)
-
-    @field_validator("tool_proficiencies", mode="before")
-    @classmethod
-    def _tool_proficiency_names(cls, v: list) -> list:
-        return _pluck(v)
+    def _codes(cls, v: list) -> list:
+        return _pluck_codes(v)
 
 
 class BackgroundCreate(BaseModel):
+    """Reference fields take codes that must exist and be visible to the caller (400)."""
+
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
-    ability_scores: list[AbilityScore]
+    ability_scores: list[str]
     feat_id: uuid.UUID
-    skills: list[SkillCreate]
+    skills: list[str]
     tool_proficiencies: list[str]
     initial_equipment: list[BackgroundInitialEquipmentCreate] = Field(default_factory=list)
 
@@ -252,9 +255,9 @@ class BackgroundCreate(BaseModel):
 class BackgroundUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = None
-    ability_scores: list[AbilityScore] | None = None
+    ability_scores: list[str] | None = None
     feat_id: uuid.UUID | None = None
-    skills: list[SkillCreate] | None = None
+    skills: list[str] | None = None
     tool_proficiencies: list[str] | None = None
     initial_equipment: list[BackgroundInitialEquipmentCreate] | None = None
 

@@ -212,14 +212,14 @@ class TestCharacterOutAbilityScores:
     def test_serializes_list_of_rows_as_name_to_value_dict(self):
         character = make_character(
             ability_scores=[
-                make_character_ability_score(ability_score="STR", value=16),
-                make_character_ability_score(ability_score="DEX", value=12),
+                make_character_ability_score(ability_code="str", value=16),
+                make_character_ability_score(ability_code="dex", value=12),
             ]
         )
 
         out = CharacterOut.model_validate(character, from_attributes=True)
 
-        assert out.ability_scores == {"STR": 16, "DEX": 12}
+        assert out.ability_scores == {"str": 16, "dex": 12}
 
     def test_empty_list_serializes_as_empty_dict(self):
         character = make_character(ability_scores=[])
@@ -234,15 +234,17 @@ class TestClassOutSkillsAndInitialEquipment:
         assert "skill_pool" not in ClassOut.model_fields
 
     def test_skills_and_initial_equipment_populated_from_relationships(self):
-        athletics = make_skill(name="Athletics", ability_score="STR")
-        arcana = make_skill(name="Arcana", ability_score="INT")
+        athletics = make_skill(code="athletics", name="Athletics", ability_code="str")
+        arcana = make_skill(code="arcana", name="Arcana", ability_code="int")
         item = make_item(name="Dagger")
         equipment_entry = make_class_initial_equipment(item=item, option="A", quantity=2)
         klass = make_class(name="Wizard", skills=[athletics, arcana], initial_equipment=[equipment_entry])
 
         out = ClassOut.model_validate(klass, from_attributes=True)
 
-        assert {s.name for s in out.skills} == {"Athletics", "Arcana"}
+        assert {(s.code, s.name, s.ability_code) for s in out.skills} == {
+            ("athletics", "Athletics", "str"), ("arcana", "Arcana", "int"),
+        }
         assert out.initial_equipment[0].item_name == "Dagger"
         assert out.initial_equipment[0].option == "A"
         assert out.initial_equipment[0].quantity == 2

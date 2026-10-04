@@ -21,12 +21,11 @@ from app.db.models.compendium import (  # noqa: E402
     ClassDefinition,
     ClassInitialEquipment,
     ItemDefinition,
-    SkillDefinition,
     SpeciesDefinition,
     SubclassDefinition,
 )
+from app.db.models.reference import Ability, Skill  # noqa: E402
 from app.db.models.user import RefreshToken, User  # noqa: E402
-from app.enums import CreatureSize  # noqa: E402
 
 
 class FakeResult:
@@ -125,7 +124,7 @@ def make_character_ability_score(**overrides) -> CharacterAbilityScore:
     defaults = dict(
         id=uuid.uuid4(),
         character_id=uuid.uuid4(),
-        ability_score="STR",
+        ability_code="str",
         value=10,
     )
     defaults.update(overrides)
@@ -141,11 +140,11 @@ def make_character(**overrides) -> Character:
         experience_points=0,
         species_id=None,
         background_id=None,
-        # Accepts either a dict (`{"STR": 10, ...}`, converted below into
+        # Accepts either a dict (`{"str": 10, ...}`, converted below into
         # `CharacterAbilityScore` rows -- keeps the public factory interface
         # unchanged) or an explicit list of `CharacterAbilityScore` for tests
         # that need fine-grained control (e.g. `ability_scores=[]`).
-        ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
+        ability_scores={"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
         current_hp=10,
         max_hp=10,
         temp_hp=0,
@@ -172,7 +171,7 @@ def make_character(**overrides) -> Character:
     ability_scores = defaults.pop("ability_scores")
     if isinstance(ability_scores, dict):
         ability_scores = [
-            make_character_ability_score(ability_score=name, value=value)
+            make_character_ability_score(ability_code=name, value=value)
             for name, value in ability_scores.items()
         ]
 
@@ -200,7 +199,7 @@ def make_species(**overrides) -> SpeciesDefinition:
         name="Elf",
         description=None,
         creature_type="humanoid",
-        size=CreatureSize.medium,
+        size_code="medium",
         base_speed=30,
         special_traits=[],
         source="srd",
@@ -282,14 +281,32 @@ def make_item(**overrides) -> ItemDefinition:
     return ItemDefinition(**defaults)
 
 
-def make_skill(**overrides) -> SkillDefinition:
+def make_skill(**overrides) -> Skill:
     defaults = dict(
-        id=uuid.uuid4(),
+        code="athletics",
         name="Athletics",
-        ability_score="STR",
+        ability_code="str",
+        description=None,
+        source="srd",
+        is_homebrew=False,
+        created_by=None,
     )
     defaults.update(overrides)
-    return SkillDefinition(**defaults)
+    return Skill(**defaults)
+
+
+SRD_ABILITY_NAMES = {
+    "str": "Strength", "dex": "Dexterity", "con": "Constitution",
+    "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma",
+}
+
+
+def make_srd_abilities() -> list[Ability]:
+    """The six SRD `ability_scores` rows (for fake-session lookups of ability codes)."""
+    return [
+        Ability(code=code, name=name, description=None, source="srd", is_homebrew=False, created_by=None)
+        for code, name in SRD_ABILITY_NAMES.items()
+    ]
 
 
 def make_class_initial_equipment(**overrides) -> ClassInitialEquipment:

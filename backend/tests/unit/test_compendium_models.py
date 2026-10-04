@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from sqlalchemy import inspect
 from sqlalchemy.orm import configure_mappers
 
@@ -10,12 +11,18 @@ from app.db.models.compendium import (
     ClassInitialEquipment,
     FeatDefinition,
     ItemDefinition,
-    SkillDefinition,
+    SpeciesDefinition,
     background_ability_scores,
     background_skills,
     background_tool_proficiencies,
+    class_armor_proficiencies,
+    class_primary_abilities,
+    class_saving_throws,
     class_skills,
+    class_tool_proficiencies,
+    class_weapon_proficiencies,
 )
+from app.db.models.reference import Skill
 
 
 def _relationship_names(model) -> set[str]:
@@ -31,30 +38,57 @@ class TestMapperConfiguration:
         configure_mappers()
 
 
-class TestSkillDefinition:
+class TestSkill:
     def test_has_expected_columns(self):
-        columns = _column_names(SkillDefinition)
-        assert {"id", "name", "ability_score"} <= columns
+        columns = _column_names(Skill)
+        assert {"code", "name", "ability_code"} <= columns
+        assert "id" not in columns
 
     def test_assignable(self):
-        skill = SkillDefinition(id=uuid.uuid4(), name="Athletics", ability_score="STR")
+        skill = Skill(code="athletics", name="Athletics", ability_code="str")
         assert skill.name == "Athletics"
-        assert skill.ability_score == "STR"
+        assert skill.ability_code == "str"
 
-    def test_unique_constraint_on_name_and_ability_score(self):
-        constraint_columns = [
-            tuple(c.name for c in constraint.columns)
-            for constraint in SkillDefinition.__table__.constraints
-            if constraint.__class__.__name__ == "UniqueConstraint"
-        ]
-        assert ("name", "ability_score") in constraint_columns
+
+def _single_fk(column):
+    assert len(column.foreign_keys) == 1
+    return next(iter(column.foreign_keys))
+
+
+class TestAssociationTablesUseCodes:
+    @pytest.mark.parametrize("table,column,target", [
+        (class_primary_abilities, "ability_code", "ability_scores.code"),
+        (class_saving_throws, "ability_code", "ability_scores.code"),
+        (background_ability_scores, "ability_code", "ability_scores.code"),
+        (class_armor_proficiencies, "armor_category_code", "armor_categories.code"),
+        (class_weapon_proficiencies, "weapon_category_code", "weapon_categories.code"),
+        (class_tool_proficiencies, "tool_proficiency_code", "tool_proficiency_options.code"),
+        (background_tool_proficiencies, "tool_proficiency_code", "tool_proficiency_options.code"),
+        (class_skills, "skill_code", "skills.code"),
+        (background_skills, "skill_code", "skills.code"),
+    ])
+    def test_column_is_restrict_fk_to_reference_table(self, table, column, target):
+        assert column in table.c
+        fk = _single_fk(table.c[column])
+        assert fk.target_fullname == target
+        assert fk.ondelete == "RESTRICT"
+
+    @pytest.mark.parametrize("table,old_column", [
+        (class_primary_abilities, "ability_score"),
+        (class_saving_throws, "ability_score"),
+        (background_ability_scores, "ability_score"),
+        (class_armor_proficiencies, "armor_proficiency"),
+        (class_weapon_proficiencies, "weapon_proficiency"),
+        (class_tool_proficiencies, "tool_proficiency"),
+        (background_tool_proficiencies, "tool_proficiency"),
+        (class_skills, "skill_id"),
+        (background_skills, "skill_id"),
+    ])
+    def test_old_column_is_gone(self, table, old_column):
+        assert old_column not in table.c
 
 
 class TestClassSkillsJunctionTable:
-    def test_junction_table_has_class_id_and_skill_id_columns(self):
-        assert "class_id" in class_skills.c
-        assert "skill_id" in class_skills.c
-
     def test_class_definition_no_longer_has_skill_pool_column(self):
         assert "skill_pool" not in _column_names(ClassDefinition)
 
@@ -64,10 +98,55 @@ class TestClassSkillsJunctionTable:
 
 class TestClassDefinitionSpellAbilityForeignKey:
     def test_spell_ability_column_has_a_real_foreign_key(self):
-        column = ClassDefinition.__table__.c.spell_ability
-        assert len(column.foreign_keys) == 1
-        fk = next(iter(column.foreign_keys))
-        assert fk.target_fullname == "ability_score_options.name"
+        fk = _single_fk(ClassDefinition.__table__.c.spell_ability)
+        assert fk.target_fullname == "ability_scores.code"
+        assert fk.ondelete == "RESTRICT"
+
+
+class TestSpeciesSizeCode:
+    def test_size_code_is_fk_to_sizes_with_medium_default(self):
+        table = SpeciesDefinition.__table__
+        assert "size" not in table.c
+        fk = _single_fk(table.c.size_code)
+        assert fk.target_fullname == "sizes.code"
+        assert fk.ondelete == "RESTRICT"
+        assert table.c.size_code.nullable is False
+        assert table.c.size_code.default.arg == "medium"
+
+    def test_no_creaturesize_enum_in_metadata(self):
+        from sqlalchemy import Enum
+
+        from app.db.base import Base
+        for table in Base.metadata.tables.values():
+            for column in table.columns:
+                if isinstance(column.type, Enum):
+                    assert column.type.name != "creaturesize"
+
+
+class TestLegacyLookupsRemoved:
+    @pytest.mark.parametrize("name", [
+        "ability_score_options", "skill_definitions", "armor_proficiency_options", "weapon_proficiency_options",
+    ])
+    def test_table_not_registered(self, name):
+        from app.db.base import Base
+        assert name not in Base.metadata.tables
+
+    @pytest.mark.parametrize("symbol", [
+        "AbilityScoreOption", "ArmorProficiencyOption", "WeaponProficiencyOption", "SkillDefinition",
+    ])
+    def test_model_not_exported(self, symbol):
+        import app.db.models as models
+        import app.db.models.compendium as compendium
+        assert not hasattr(compendium, symbol)
+        assert not hasattr(models, symbol)
+
+    def test_enums_module_no_longer_exports_ability_score_or_creature_size(self):
+        try:
+            import app.enums as enums
+        except ImportError:
+            return
+        assert not hasattr(enums, "AbilityScore")
+        assert not hasattr(enums, "CreatureSize")
 
 
 class TestClassInitialEquipment:
@@ -90,18 +169,6 @@ class TestClassInitialEquipment:
         assert entry.quantity == 1
 
 
-class TestBackgroundAbilityScoresJunctionTable:
-    def test_junction_table_has_background_id_and_ability_score_columns(self):
-        assert "background_id" in background_ability_scores.c
-        assert "ability_score" in background_ability_scores.c
-
-
-class TestBackgroundSkillsJunctionTable:
-    def test_junction_table_has_background_id_and_skill_id_columns(self):
-        assert "background_id" in background_skills.c
-        assert "skill_id" in background_skills.c
-
-
 class TestBackgroundDefinition:
     def test_has_expected_columns(self):
         columns = _column_names(BackgroundDefinition)
@@ -114,11 +181,6 @@ class TestBackgroundDefinition:
         assert len(column.foreign_keys) == 1
         fk = next(iter(column.foreign_keys))
         assert fk.target_fullname == "feat_definitions.id"
-
-    def test_tool_proficiencies_junction_table_references_tool_proficiency_options(self):
-        assert "background_id" in background_tool_proficiencies.c
-        fks = {fk.target_fullname for fk in background_tool_proficiencies.c.tool_proficiency.foreign_keys}
-        assert fks == {"tool_proficiency_options.name"}
 
     def test_has_expected_relationships(self):
         relationships = _relationship_names(BackgroundDefinition)

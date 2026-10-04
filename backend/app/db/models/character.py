@@ -113,31 +113,31 @@ class CharacterClass(Base):
 class CharacterSkill(Base):
     """One row per skill proficiency a character has, with where it came from and expertise."""
     __tablename__ = "character_skills"
-    __table_args__ = (UniqueConstraint("character_id", "skill_id"),)
+    __table_args__ = (UniqueConstraint("character_id", "skill_code"),)
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"))
-    skill_id: Mapped[uuid.UUID]     = mapped_column(UUID(as_uuid=True), ForeignKey("skill_definitions.id"), nullable=False)
+    skill_code: Mapped[str]         = mapped_column(String(50), ForeignKey("skills.code", ondelete="RESTRICT"), nullable=False)
     source: Mapped[str]             = mapped_column(String(20), nullable=False)     # "class" | "background" | "species" | "feat" | "other"
     expertise: Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     character: Mapped["Character"]  = relationship(back_populates="skills")
-    skill: Mapped["SkillDefinition"] = relationship(lazy="selectin")  # noqa: F821
+    skill: Mapped["Skill"]          = relationship(lazy="selectin")  # noqa: F821
 
     @property
     def skill_name(self) -> str | None:
         return self.skill.name if self.skill else None
 
     @property
-    def ability_score(self) -> str | None:
-        return self.skill.ability_score if self.skill else None
+    def ability_code(self) -> str | None:
+        return self.skill.ability_code if self.skill else None
 
 
 class CharacterAbilityScore(Base):
-    """One row per ability score a character has a value for (STR/DEX/CON/INT/WIS/CHA)."""
+    """One row per ability score a character has a value for (`ability_scores.code`: str/dex/...)."""
     __tablename__ = "character_ability_scores"
     __table_args__ = (
-        UniqueConstraint("character_id", "ability_score"),
+        UniqueConstraint("character_id", "ability_code"),
         # D&D 5e/5.5 ability score bounds: 1 is the practical floor (0 has special
         # rules engine-side and isn't a normal assignable value), 30 is the usual
         # hard cap (e.g. Wish/epic boons). Assumption documented for QA/review.
@@ -146,7 +146,7 @@ class CharacterAbilityScore(Base):
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     character_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"))
-    ability_score: Mapped[str]      = mapped_column(String(3), ForeignKey("ability_score_options.name"), nullable=False)
+    ability_code: Mapped[str]       = mapped_column(String(50), ForeignKey("ability_scores.code", ondelete="RESTRICT"), nullable=False)
     value: Mapped[int]              = mapped_column(Integer, nullable=False, default=10)
 
     character: Mapped["Character"] = relationship(back_populates="ability_scores")

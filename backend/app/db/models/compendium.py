@@ -2,80 +2,60 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Column, DateTime, Enum as SAEnum, Float,
-    ForeignKey, Integer, String, Table, Text, UniqueConstraint, func,
+    Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String, Table, Text, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.enums import CreatureSize
+from app.db.models.reference import (
+    CODE_LENGTH,
+    Ability,
+    ArmorCategory,
+    Skill,
+    ToolProficiencyOption,
+    WeaponCategory,
+)
 
 
 
-class AbilityScoreOption(Base):
-    __tablename__ = "ability_score_options"
-    name: Mapped[str] = mapped_column(String(3), primary_key=True)
-
-
-class ArmorProficiencyOption(Base):
-    __tablename__ = "armor_proficiency_options"
-    name: Mapped[str] = mapped_column(String(30), primary_key=True)
-
-
-class WeaponProficiencyOption(Base):
-    __tablename__ = "weapon_proficiency_options"
-    name: Mapped[str] = mapped_column(String(50), primary_key=True)
-
-
-class ToolProficiencyOption(Base):
-    __tablename__ = "tool_proficiency_options"
-    name: Mapped[str] = mapped_column(String(60), primary_key=True)
-
-
-class SkillDefinition(Base):
-    __tablename__ = "skill_definitions"
-    __table_args__ = (UniqueConstraint("name", "ability_score"),)
-
-    id: Mapped[uuid.UUID]       = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str]           = mapped_column(String(100), nullable=False)
-    ability_score: Mapped[str]  = mapped_column(String(3), ForeignKey("ability_score_options.name"), nullable=False)
-
+def _code_fk(target: str) -> ForeignKey:
+    return ForeignKey(target, ondelete="RESTRICT")
 
 
 class_primary_abilities = Table(
     "class_primary_abilities",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("ability_score", String(3), ForeignKey("ability_score_options.name"), primary_key=True),
+    Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
 )
 
 class_saving_throws = Table(
     "class_saving_throws",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("ability_score", String(3), ForeignKey("ability_score_options.name"), primary_key=True),
+    Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
 )
 
 class_armor_proficiencies = Table(
     "class_armor_proficiencies",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("armor_proficiency", String(30), ForeignKey("armor_proficiency_options.name"), primary_key=True),
+    Column("armor_category_code", String(CODE_LENGTH), _code_fk("armor_categories.code"), primary_key=True),
 )
 
 class_weapon_proficiencies = Table(
     "class_weapon_proficiencies",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("weapon_proficiency", String(50), ForeignKey("weapon_proficiency_options.name"), primary_key=True),
+    Column("weapon_category_code", String(CODE_LENGTH), _code_fk("weapon_categories.code"), primary_key=True),
 )
 
 class_tool_proficiencies = Table(
     "class_tool_proficiencies",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("tool_proficiency", String(60), ForeignKey("tool_proficiency_options.name"), primary_key=True),
+    Column("tool_proficiency_code", String(CODE_LENGTH), _code_fk("tool_proficiency_options.code"), primary_key=True),
 )
 
 spell_class_lists = Table(
@@ -89,21 +69,21 @@ class_skills = Table(
     "class_skills",
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
+    Column("skill_code", String(CODE_LENGTH), _code_fk("skills.code"), primary_key=True),
 )
 
 background_ability_scores = Table(
     "background_ability_scores",
     Base.metadata,
     Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("ability_score", String(3), ForeignKey("ability_score_options.name"), primary_key=True),
+    Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
 )
 
 background_skills = Table(
     "background_skills",
     Base.metadata,
     Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("skill_id", UUID(as_uuid=True), ForeignKey("skill_definitions.id"), primary_key=True),
+    Column("skill_code", String(CODE_LENGTH), _code_fk("skills.code"), primary_key=True),
 )
 
 # Tool proficiency options offered by a background: one entry = fixed
@@ -112,7 +92,7 @@ background_tool_proficiencies = Table(
     "background_tool_proficiencies",
     Base.metadata,
     Column("background_id", UUID(as_uuid=True), ForeignKey("background_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("tool_proficiency", String(60), ForeignKey("tool_proficiency_options.name"), primary_key=True),
+    Column("tool_proficiency_code", String(CODE_LENGTH), _code_fk("tool_proficiency_options.code"), primary_key=True),
 )
 
 
@@ -143,7 +123,9 @@ class SpeciesDefinition(Base):
     name: Mapped[str]               = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     creature_type: Mapped[str]      = mapped_column(String(30), nullable=False)
-    size: Mapped[CreatureSize]      = mapped_column(SAEnum(CreatureSize), nullable=False, default=CreatureSize.medium)
+    size_code: Mapped[str]          = mapped_column(
+        String(CODE_LENGTH), ForeignKey("sizes.code", ondelete="RESTRICT"), nullable=False, default="medium"
+    )
     base_speed: Mapped[int]         = mapped_column(Integer, nullable=False, default=30)
     special_traits: Mapped[list]    = mapped_column(JSONB, nullable=False, default=list)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
@@ -161,29 +143,31 @@ class ClassDefinition(Base):
     hit_die: Mapped[int]            = mapped_column(Integer, nullable=False)
     skill_choices: Mapped[int]      = mapped_column(Integer, nullable=False, default=2)
     subclass_level: Mapped[int]     = mapped_column(Integer, nullable=False, default=3)
-    spell_ability: Mapped[str | None] = mapped_column(String(3), ForeignKey("ability_score_options.name"))
+    spell_ability: Mapped[str | None] = mapped_column(
+        String(CODE_LENGTH), ForeignKey("ability_scores.code", ondelete="RESTRICT")
+    )
     spellcasting_type: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    primary_ability: Mapped[list[AbilityScoreOption]] = relationship(
+    primary_ability: Mapped[list[Ability]] = relationship(
         secondary=class_primary_abilities, lazy="selectin"
     )
-    saving_throw_proficiencies: Mapped[list[AbilityScoreOption]] = relationship(
+    saving_throw_proficiencies: Mapped[list[Ability]] = relationship(
         secondary=class_saving_throws, lazy="selectin"
     )
-    armor_proficiencies: Mapped[list[ArmorProficiencyOption]] = relationship(
+    armor_proficiencies: Mapped[list[ArmorCategory]] = relationship(
         secondary=class_armor_proficiencies, lazy="selectin"
     )
-    weapon_proficiencies: Mapped[list[WeaponProficiencyOption]] = relationship(
+    weapon_proficiencies: Mapped[list[WeaponCategory]] = relationship(
         secondary=class_weapon_proficiencies, lazy="selectin"
     )
     tool_proficiencies: Mapped[list[ToolProficiencyOption]] = relationship(
         secondary=class_tool_proficiencies, lazy="selectin"
     )
-    skills: Mapped[list[SkillDefinition]] = relationship(
+    skills: Mapped[list[Skill]] = relationship(
         secondary=class_skills, lazy="selectin"
     )
     subclasses: Mapped[list["SubclassDefinition"]] = relationship(back_populates="class_def")
@@ -223,10 +207,10 @@ class BackgroundDefinition(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    ability_scores: Mapped[list[AbilityScoreOption]] = relationship(
+    ability_scores: Mapped[list[Ability]] = relationship(
         secondary=background_ability_scores, lazy="selectin"
     )
-    skills: Mapped[list[SkillDefinition]] = relationship(
+    skills: Mapped[list[Skill]] = relationship(
         secondary=background_skills, lazy="selectin"
     )
     feat: Mapped["FeatDefinition"] = relationship(lazy="selectin")

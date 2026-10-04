@@ -47,12 +47,12 @@ async def _reset(db_session, *_ignored):
 
 async def _skills_of(db_session, character_id):
     result = await db_session.execute(select(CharacterSkill).where(CharacterSkill.character_id == character_id))
-    return {row.skill_id: row for row in result.scalars().all()}
+    return {row.skill_code: row for row in result.scalars().all()}
 
 
 def _add(character_id, skill, source, user, db):
     return add_character_skill(
-        character_id, CharacterSkillCreate(skill_id=skill.id, source=source), current_user=user, db=db
+        character_id, CharacterSkillCreate(skill_code=skill.code, source=source), current_user=user, db=db
     )
 
 
@@ -63,28 +63,29 @@ class TestAddSkill:
     async def test_other_source_returns_entry_with_name_ability_source_expertise(self, db_session, no_redis):
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
-        skill = await seed_skill(db_session, name="Stealth", ability_score="DEX")
+        skill = await seed_skill(db_session, name="Stealth", ability_code="dex")
         await _reset(db_session, owner)
 
         entry = await _add(character.id, skill, "other", owner, db_session)
         out = CharacterSkillOut.model_validate(entry, from_attributes=True)
 
-        assert (out.skill_id, out.skill_name, out.ability_score, out.source, out.expertise) == (
-            skill.id, "Stealth", "DEX", "other", False
+        assert (out.skill_code, out.skill_name, out.ability_code, out.source, out.expertise) == (
+            skill.code, "Stealth", "dex", "other", False
         )
-        assert skill.id in await _skills_of(db_session, character.id)
+        assert skill.code in await _skills_of(db_session, character.id)
 
-    async def test_nonexistent_skill_404(self, db_session, no_redis):
+    async def test_nonexistent_skill_400(self, db_session, no_redis):
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         await _reset(db_session, owner)
 
         with pytest.raises(HTTPException) as exc:
             await add_character_skill(
-                character.id, CharacterSkillCreate(skill_id=uuid.uuid4(), source="other"),
+                character.id, CharacterSkillCreate(skill_code="no_such_skill", source="other"),
                 current_user=owner, db=db_session,
             )
-        assert exc.value.status_code == 404
+        # Unknown (or invisible) codes are a 400, like every code reference.
+        assert exc.value.status_code == 400
 
     async def test_nonexistent_character_404(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -241,12 +242,12 @@ class TestAddSkill:
         assert channel == f"campaign:{campaign.id}"
         assert msg["event"] == "character.skill.add"
         assert msg["character_id"] == str(character.id)
-        assert msg["payload"]["skill_id"] == str(skill.id)
+        assert msg["payload"]["skill_code"] == str(skill.code)
         assert msg["actor_id"] == str(dm.id)
 
 
 # --------------------------------------------------------------------------
-# Step 8: DELETE /characters/{id}/skills/{skill_id}
+# Step 8: DELETE /characters/{id}/skills/{skill_code}
 # --------------------------------------------------------------------------
 class TestRemoveSkill:
     async def test_removes_row_and_broadcasts(self, db_session, no_redis):
@@ -257,12 +258,12 @@ class TestRemoveSkill:
         await seed_character_skill(db_session, character, skill)
         await _reset(db_session, owner)
 
-        result = await remove_character_skill(character.id, skill.id, current_user=owner, db=db_session)
+        result = await remove_character_skill(character.id, skill.code, current_user=owner, db=db_session)
 
         assert result is None
         assert await _skills_of(db_session, character.id) == {}
         assert [m["event"] for _, m in no_redis] == ["character.skill.remove"]
-        assert no_redis[0][1]["payload"]["skill_id"] == str(skill.id)
+        assert no_redis[0][1]["payload"]["skill_code"] == str(skill.code)
 
     async def test_skill_not_on_character_404(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -271,7 +272,7 @@ class TestRemoveSkill:
         await _reset(db_session, owner)
 
         with pytest.raises(HTTPException) as exc:
-            await remove_character_skill(character.id, skill.id, current_user=owner, db=db_session)
+            await remove_character_skill(character.id, skill.code, current_user=owner, db=db_session)
         assert exc.value.status_code == 404
 
     async def test_stranger_gets_403(self, db_session, no_redis):
@@ -282,17 +283,17 @@ class TestRemoveSkill:
         await _reset(db_session, stranger)
 
         with pytest.raises(HTTPException) as exc:
-            await remove_character_skill(character.id, skill.id, current_user=stranger, db=db_session)
+            await remove_character_skill(character.id, skill.code, current_user=stranger, db=db_session)
         assert exc.value.status_code == 403
-        assert skill.id in await _skills_of(db_session, character.id)
+        assert skill.code in await _skills_of(db_session, character.id)
 
 
 # --------------------------------------------------------------------------
-# PATCH /characters/{id}/skills/{skill_id} (expertise; no class restriction, no limit)
+# PATCH /characters/{id}/skills/{skill_code} (expertise; no class restriction, no limit)
 # --------------------------------------------------------------------------
 def _patch(character_id, skill, value, user, db):
     return update_character_skill_expertise(
-        character_id, skill.id, CharacterSkillExpertiseUpdate(expertise=value), current_user=user, db=db
+        character_id, skill.code, CharacterSkillExpertiseUpdate(expertise=value), current_user=user, db=db
     )
 
 
@@ -301,21 +302,21 @@ class TestSkillExpertise:
         owner = await seed_user(db_session)
         campaign = await seed_campaign(db_session, owner)
         character = await seed_character(db_session, owner=owner, campaign_id=campaign.id)
-        skill = await seed_skill(db_session, name="Stealth", ability_score="DEX")
+        skill = await seed_skill(db_session, name="Stealth", ability_code="dex")
         await seed_character_skill(db_session, character, skill, source="class")
         await _reset(db_session, owner)
 
         out = CharacterSkillOut.model_validate(
             await _patch(character.id, skill, True, owner, db_session), from_attributes=True
         )
-        assert (out.skill_id, out.skill_name, out.ability_score, out.source, out.expertise) == (
-            skill.id, "Stealth", "DEX", "class", True,
+        assert (out.skill_code, out.skill_name, out.ability_code, out.source, out.expertise) == (
+            skill.code, "Stealth", "dex", "class", True,
         )
-        assert (await _skills_of(db_session, character.id))[skill.id].expertise is True
+        assert (await _skills_of(db_session, character.id))[skill.code].expertise is True
 
         out = await _patch(character.id, skill, False, owner, db_session)
         assert out.expertise is False
-        assert (await _skills_of(db_session, character.id))[skill.id].expertise is False
+        assert (await _skills_of(db_session, character.id))[skill.code].expertise is False
 
     async def test_skill_not_owned_404(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -347,7 +348,7 @@ class TestSkillExpertise:
         with pytest.raises(HTTPException) as exc:
             await _patch(character.id, skill, True, stranger, db_session)
         assert exc.value.status_code == 403
-        assert (await _skills_of(db_session, character.id))[skill.id].expertise is False
+        assert (await _skills_of(db_session, character.id))[skill.code].expertise is False
 
     async def test_dm_allowed_and_event_broadcast(self, db_session, no_redis):
         owner, dm = await seed_user(db_session), await seed_user(db_session)
@@ -365,7 +366,7 @@ class TestSkillExpertise:
         assert channel == f"campaign:{campaign.id}"
         assert msg["event"] == "character.skill.expertise"
         assert msg["character_id"] == str(character.id)
-        assert msg["payload"] == {"skill_id": str(skill.id), "expertise": True}
+        assert msg["payload"] == {"skill_code": str(skill.code), "expertise": True}
         assert msg["actor_id"] == str(dm.id)
 
     async def test_create_schema_has_no_expertise_field(self):
@@ -388,7 +389,7 @@ class TestAutomaticBackgroundSkills:
         )
         out = CharacterOut.model_validate(character, from_attributes=True)
 
-        assert {(s.skill_id, s.source) for s in out.skills} == {(s1.id, "background"), (s2.id, "background")}
+        assert {(s.skill_code, s.source) for s in out.skills} == {(s1.code, "background"), (s2.code, "background")}
 
     async def test_create_without_background_creates_no_rows(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -422,8 +423,8 @@ class TestAutomaticBackgroundSkills:
         )
         out = CharacterOut.model_validate(updated, from_attributes=True)
 
-        assert {(s.skill_id, s.source) for s in out.skills} == {
-            (shared.id, "background"), (new_only.id, "background"), (other_src.id, "feat"),
+        assert {(s.skill_code, s.source) for s in out.skills} == {
+            (shared.code, "background"), (new_only.code, "background"), (other_src.code, "feat"),
         }
         assert out.background_id == new_bg.id
 
@@ -441,7 +442,7 @@ class TestAutomaticBackgroundSkills:
         )
         out = CharacterOut.model_validate(updated, from_attributes=True)
 
-        assert {(s.skill_id, s.source) for s in out.skills} == {(skill.id, "species"), (extra.id, "background")}
+        assert {(s.skill_code, s.source) for s in out.skills} == {(skill.code, "species"), (extra.code, "background")}
 
     async def test_patch_without_background_change_leaves_skills_untouched(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -458,8 +459,8 @@ class TestAutomaticBackgroundSkills:
         await update_character(character.id, CharacterUpdate(background_id=bg.id), current_user=owner, db=db_session)
 
         rows = await _skills_of(db_session, character.id)
-        assert set(rows) == {skill.id}
-        assert rows[skill.id].id == row.id
+        assert set(rows) == {skill.code}
+        assert rows[skill.code].id == row.id
 
     async def test_patch_nonexistent_background_404(self, db_session, no_redis):
         owner = await seed_user(db_session)
@@ -504,10 +505,10 @@ class TestCreateWithInitialClassAndSkills:
                 name="Batch Hero",
                 initial_class={"class_id": klass.id, "level": 1},
                 skills=[
-                    CharacterSkillCreate(skill_id=c1.id, source="class"),
-                    CharacterSkillCreate(skill_id=c2.id, source="class"),
-                    CharacterSkillCreate(skill_id=species_skill.id, source="species"),
-                    CharacterSkillCreate(skill_id=other.id, source="other"),
+                    CharacterSkillCreate(skill_code=c1.code, source="class"),
+                    CharacterSkillCreate(skill_code=c2.code, source="class"),
+                    CharacterSkillCreate(skill_code=species_skill.code, source="species"),
+                    CharacterSkillCreate(skill_code=other.code, source="other"),
                 ],
             ),
             current_user=owner, db=db_session,
@@ -516,8 +517,8 @@ class TestCreateWithInitialClassAndSkills:
 
         assert [(c.class_id, c.level) for c in out.classes] == [(klass.id, 1)]
         assert out.total_level == 1
-        assert {(s.skill_id, s.source) for s in out.skills} == {
-            (c1.id, "class"), (c2.id, "class"), (species_skill.id, "species"), (other.id, "other"),
+        assert {(s.skill_code, s.source) for s in out.skills} == {
+            (c1.code, "class"), (c2.code, "class"), (species_skill.code, "species"), (other.code, "other"),
         }
 
     async def test_initial_class_without_skills_is_persisted(self, db_session, no_redis):
@@ -538,8 +539,8 @@ class TestCreateWithInitialClassAndSkills:
                     name="Rolled Back",
                     initial_class={"class_id": klass.id},
                     skills=[
-                        CharacterSkillCreate(skill_id=c1.id, source="class"),
-                        CharacterSkillCreate(skill_id=outside.id, source="class"),
+                        CharacterSkillCreate(skill_code=c1.code, source="class"),
+                        CharacterSkillCreate(skill_code=outside.code, source="class"),
                     ],
                 ),
                 current_user=owner, db=db_session,
@@ -554,7 +555,7 @@ class TestCreateWithInitialClassAndSkills:
                 CharacterCreate(
                     name="Too Many",
                     initial_class={"class_id": klass.id},
-                    skills=[CharacterSkillCreate(skill_id=s.id, source="class") for s in (c1, c2, c3)],
+                    skills=[CharacterSkillCreate(skill_code=s.code, source="class") for s in (c1, c2, c3)],
                 ),
                 current_user=owner, db=db_session,
             )
@@ -565,7 +566,7 @@ class TestCreateWithInitialClassAndSkills:
         owner, _, c1, _, _, _ = await self._world(db_session)
         with pytest.raises(HTTPException) as exc:
             await create_character(
-                CharacterCreate(name="No Class", skills=[CharacterSkillCreate(skill_id=c1.id, source="class")]),
+                CharacterCreate(name="No Class", skills=[CharacterSkillCreate(skill_code=c1.code, source="class")]),
                 current_user=owner, db=db_session,
             )
         assert exc.value.status_code == 400
@@ -581,17 +582,17 @@ class TestCreateWithInitialClassAndSkills:
         assert exc.value.status_code == 404
         await self._assert_nothing_created(db_session, "Bad Class")
 
-    async def test_nonexistent_skill_404_and_nothing_created(self, db_session, no_redis):
+    async def test_nonexistent_skill_400_and_nothing_created(self, db_session, no_redis):
         owner, klass, *_ = await self._world(db_session)
         with pytest.raises(HTTPException) as exc:
             await create_character(
                 CharacterCreate(
                     name="Bad Skill", initial_class={"class_id": klass.id},
-                    skills=[CharacterSkillCreate(skill_id=uuid.uuid4(), source="other")],
+                    skills=[CharacterSkillCreate(skill_code="no_such_skill", source="other")],
                 ),
                 current_user=owner, db=db_session,
             )
-        assert exc.value.status_code == 404
+        assert exc.value.status_code == 400
         await self._assert_nothing_created(db_session, "Bad Skill")
 
     async def test_duplicate_inside_batch_400(self, db_session, no_redis):
@@ -601,8 +602,8 @@ class TestCreateWithInitialClassAndSkills:
                 CharacterCreate(
                     name="Dup",
                     skills=[
-                        CharacterSkillCreate(skill_id=c1.id, source="other"),
-                        CharacterSkillCreate(skill_id=c1.id, source="feat"),
+                        CharacterSkillCreate(skill_code=c1.code, source="other"),
+                        CharacterSkillCreate(skill_code=c1.code, source="feat"),
                     ],
                 ),
                 current_user=owner, db=db_session,
@@ -621,7 +622,7 @@ class TestCreateWithInitialClassAndSkills:
             await create_character(
                 CharacterCreate(
                     name="Bg Dup", background_id=bg.id,
-                    skills=[CharacterSkillCreate(skill_id=skill.id, source="background")],
+                    skills=[CharacterSkillCreate(skill_code=skill.code, source="background")],
                 ),
                 current_user=owner, db=db_session,
             )
@@ -639,7 +640,7 @@ class TestCreateWithInitialClassAndSkills:
             await create_character(
                 CharacterCreate(
                     name="Overlap", background_id=bg.id,
-                    skills=[CharacterSkillCreate(skill_id=skill.id, source="species")],
+                    skills=[CharacterSkillCreate(skill_code=skill.code, source="species")],
                 ),
                 current_user=owner, db=db_session,
             )
@@ -656,11 +657,11 @@ class TestCreateWithInitialClassAndSkills:
         character = await create_character(
             CharacterCreate(
                 name="Both", background_id=bg.id,
-                skills=[CharacterSkillCreate(skill_id=species_skill.id, source="species")],
+                skills=[CharacterSkillCreate(skill_code=species_skill.code, source="species")],
             ),
             current_user=owner, db=db_session,
         )
         out = CharacterOut.model_validate(character, from_attributes=True)
-        assert {(s.skill_id, s.source) for s in out.skills} == {
-            (bg_skill.id, "background"), (species_skill.id, "species"),
+        assert {(s.skill_code, s.source) for s in out.skills} == {
+            (bg_skill.code, "background"), (species_skill.code, "species"),
         }

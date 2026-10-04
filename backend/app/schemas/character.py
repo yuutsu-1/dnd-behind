@@ -32,13 +32,14 @@ class UpdateInventoryItem(BaseModel):
     attuned: bool | None = None
     custom_notes: str | None = None
 
-_ABILITY_SCORES_DEFAULT = {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+# Keys are `ability_scores` codes; every key must exist and be visible to the caller (400).
+_ABILITY_SCORES_DEFAULT = {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
 
 SkillSource = Literal["class", "background", "species", "feat", "other"]
 
 
 class CharacterSkillCreate(BaseModel):
-    skill_id: uuid.UUID
+    skill_code: str
     source: SkillSource
 
 
@@ -49,9 +50,9 @@ class CharacterSkillExpertiseUpdate(BaseModel):
 class CharacterSkillOut(BaseModel):
     model_config = {"from_attributes": True}
 
-    skill_id: uuid.UUID
+    skill_code: str
     skill_name: str | None
-    ability_score: str | None
+    ability_code: str | None
     source: str
     expertise: bool
 
@@ -161,11 +162,10 @@ class CharacterOut(BaseModel):
     @classmethod
     def _ability_scores_as_dict(cls, v):
         # ORM side is a list of `CharacterAbilityScore` rows (one per ability);
-        # the public API shape keeps the flat `{"STR": 16, ...}` dict clients
-        # already rely on.
+        # the public API shape is the flat `{"str": 16, ...}` dict keyed by code.
         if isinstance(v, dict):
             return v
-        return {row.ability_score: row.value for row in v}
+        return {row.ability_code: row.value for row in v}
 
 
 class CharacterWithInventory(CharacterOut):

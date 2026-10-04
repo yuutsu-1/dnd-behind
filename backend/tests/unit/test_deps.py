@@ -146,3 +146,55 @@ class TestRequireCampaignMember:
             campaign_id=campaign_id, current_user=current_user, db=fake_db
         )
         assert result is membership
+
+
+class TestGetOptionalUser:
+    async def test_no_token_returns_none(self, fake_db):
+        from app.core.deps import get_optional_user
+
+        result = await get_optional_user(token=None, db=fake_db)
+        assert result is None
+        fake_db.execute.assert_not_called()
+
+    async def test_valid_access_token_returns_user(self, fake_db):
+        from app.core.deps import get_optional_user
+
+        user = make_user(is_active=True)
+        fake_db.execute.return_value = make_result(scalar=user)
+
+        result = await get_optional_user(token=create_access_token(user.id), db=fake_db)
+        assert result is user
+
+    async def test_malformed_token_raises_401(self, fake_db):
+        from app.core.deps import get_optional_user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_optional_user(token="not-a-jwt", db=fake_db)
+        assert exc_info.value.status_code == 401
+
+    async def test_expired_token_raises_401(self, fake_db, monkeypatch):
+        from datetime import timedelta
+
+        from app.core import security
+        from app.core.deps import get_optional_user
+
+        token = security._make_token({"sub": str(uuid.uuid4()), "type": "access"}, timedelta(seconds=-10))
+        with pytest.raises(HTTPException) as exc_info:
+            await get_optional_user(token=token, db=fake_db)
+        assert exc_info.value.status_code == 401
+
+    async def test_refresh_token_raises_401(self, fake_db):
+        from app.core.deps import get_optional_user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_optional_user(token=create_refresh_token(uuid.uuid4()), db=fake_db)
+        assert exc_info.value.status_code == 401
+
+    async def test_inactive_user_raises_401(self, fake_db):
+        from app.core.deps import get_optional_user
+
+        user = make_user(is_active=False)
+        fake_db.execute.return_value = make_result(scalar=user)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_optional_user(token=create_access_token(user.id), db=fake_db)
+        assert exc_info.value.status_code == 401

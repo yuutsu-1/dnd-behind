@@ -9,7 +9,7 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
 
 import pytest  # noqa: E402
-from sqlalchemy import event, select  # noqa: E402
+from sqlalchemy import event  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.db.models.campaign import Campaign, CampaignMember  # noqa: E402
@@ -21,19 +21,17 @@ from app.db.models.character import (  # noqa: E402
     CharacterSkill,
 )
 from app.db.models.compendium import (  # noqa: E402
-    AbilityScoreOption,
     BackgroundDefinition,
     BackgroundInitialEquipment,
     ClassDefinition,
     ClassInitialEquipment,
     FeatDefinition,
     ItemDefinition,
-    SkillDefinition,
     SpeciesDefinition,
     SubclassDefinition,
 )
+from app.db.models.reference import CampaignHomebrewRule, Skill  # noqa: E402
 from app.db.models.user import User  # noqa: E402
-from app.enums import CreatureSize  # noqa: E402
 
 INTEGRATION_DATABASE_URL = os.environ.get(
     "INTEGRATION_DATABASE_URL",
@@ -73,6 +71,32 @@ async def db_session(db_engine):
         await session.close()
         await outer_transaction.rollback()
         await connection.close()
+
+
+@pytest.fixture
+async def api_client(db_session):
+    """HTTP client (httpx + ASGITransport, no real server) whose requests share the
+    test's `db_session` (so everything is rolled back at the end of the test)."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.deps import get_db
+    from app.main import app
+
+    async def _override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = _override_get_db
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def auth_headers(user: User) -> dict[str, str]:
+    from app.core.security import create_access_token
+
+    return {"Authorization": f"Bearer {create_access_token(user.id)}"}
 
 
 @pytest.fixture
@@ -133,7 +157,7 @@ async def seed_species(session: AsyncSession, **overrides) -> SpeciesDefinition:
         name=f"Species-{uuid.uuid4().hex[:10]}",
         description=None,
         creature_type="humanoid",
-        size=CreatureSize.medium,
+        size_code="medium",
         base_speed=30,
         special_traits=[],
         source="srd",
@@ -305,10 +329,11 @@ async def seed_character(session: AsyncSession, owner: User, **overrides) -> Cha
         experience_points=0,
         species_id=None,
         background_id=None,
-        # Accepts either a dict (`{"STR": 10, ...}`, converted below into
-        # `character_ability_scores` rows -- keeps the public factory interface
-        # unchanged) or an explicit list of `CharacterAbilityScore` instances.
-        ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10},
+        # Accepts either a dict (`{"str": 10, ...}`, converted below into
+        # `character_ability_scores` rows) or an explicit list of
+        # `CharacterAbilityScore` instances. Codes must exist in `ability_scores`
+        # (the SRD seed provides the six standard ones).
+        ability_scores={"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
         current_hp=10,
         max_hp=10,
         temp_hp=0,
@@ -332,13 +357,11 @@ async def seed_character(session: AsyncSession, owner: User, **overrides) -> Cha
     session.add(obj)
 
     if isinstance(ability_scores, dict):
-        await _ensure_ability_score_options(session, ability_scores.keys())
-        for name, value in ability_scores.items():
-            session.add(CharacterAbilityScore(character_id=character_id, ability_score=name, value=value))
+        for code, value in ability_scores.items():
+            session.add(CharacterAbilityScore(character_id=character_id, ability_code=code, value=value))
     else:
         for row in ability_scores:
             row.character_id = character_id
-            await _ensure_ability_score_options(session, [row.ability_score])
             session.add(row)
 
     await session.flush()
@@ -369,59 +392,84 @@ async def seed_character_ability_score(
     defaults = dict(
         id=uuid.uuid4(),
         character_id=character.id,
-        ability_score="STR",
+        ability_code="str",
         value=10,
     )
     defaults.update(overrides)
-    await _ensure_ability_score_options(session, [defaults["ability_score"]])
     obj = CharacterAbilityScore(**defaults)
     session.add(obj)
     await session.flush()
     return obj
 
 
-async def _ensure_ability_score_options(session: AsyncSession, names) -> None:
-    """Get-or-create `AbilityScoreOption` rows so FKs to `ability_score_options.name`
-    (used by `SkillDefinition.ability_score` and `CharacterAbilityScore.ability_score`)
-    can be safely inserted, even if no class has referenced that ability yet."""
-    names = list(names)
-    if not names:
-        return
-    existing = await session.execute(select(AbilityScoreOption).where(AbilityScoreOption.name.in_(names)))
-    existing_names = {row.name for row in existing.scalars().all()}
-    missing = set(names) - existing_names
-    for name in missing:
-        session.add(AbilityScoreOption(name=name))
-    if missing:
-        await session.flush()
+def random_code(prefix: str = "hb") -> str:
+    """A fresh code valid for `^[a-z0-9]+(_[a-z0-9]+)*$`."""
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-async def seed_skill(session: AsyncSession, **overrides) -> SkillDefinition:
+async def seed_skill(session: AsyncSession, **overrides) -> Skill:
+    """A homebrew-free skill row in the `skills` reference table (random code,
+    `ability_code` defaults to the SRD `str`)."""
     defaults = dict(
-        id=uuid.uuid4(),
+        code=random_code("skill"),
         name=f"Skill-{uuid.uuid4().hex[:10]}",
-        ability_score="STR",
+        ability_code="str",
+        description=None,
+        source="srd",
+        is_homebrew=False,
+        created_by=None,
     )
     defaults.update(overrides)
-
-    # `ability_score` is a FK to `ability_score_options.name`; ensure the
-    # lookup row exists (it is otherwise only lazily created when a class
-    # references it as a primary/saving-throw ability).
-    await _ensure_ability_score_options(session, [defaults["ability_score"]])
-
-    obj = SkillDefinition(**defaults)
+    obj = Skill(**defaults)
     session.add(obj)
     await session.flush()
     return obj
 
 
+async def seed_reference(
+    session: AsyncSession,
+    model,
+    author: User | None = None,
+    campaigns=(),
+    **overrides,
+):
+    """Create a reference row of `model` (any `app.db.models.reference` model).
+
+    With `author`, the row is homebrew (`source="homebrew"`, `is_homebrew=True`,
+    `created_by=author.id`); without it, it looks like an SRD row. `campaigns`
+    adds `campaign_homebrew_rules` shares. Code-keyed models get a random code and
+    name unless overridden; numeric-keyed models need their key in `overrides`."""
+    defaults: dict = {}
+    if "code" in model.__table__.c:
+        defaults.update(code=random_code(), name=f"Ref-{uuid.uuid4().hex[:8]}")
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
+    else:
+        defaults.update(source="srd", is_homebrew=False, created_by=None)
+    defaults.update(overrides)
+    obj = model(**defaults)
+    session.add(obj)
+    await session.flush()
+
+    key_column = next(iter(model.__table__.primary_key.columns)).name
+    for campaign in campaigns:
+        session.add(CampaignHomebrewRule(
+            resource_table=model.__tablename__,
+            resource_key=str(getattr(obj, key_column)),
+            campaign_id=campaign.id,
+        ))
+    if campaigns:
+        await session.flush()
+    return obj
+
+
 async def seed_character_skill(
-    session: AsyncSession, character: Character, skill: SkillDefinition, **overrides
+    session: AsyncSession, character: Character, skill: Skill, **overrides
 ) -> CharacterSkill:
     defaults = dict(
         id=uuid.uuid4(),
         character_id=character.id,
-        skill_id=skill.id,
+        skill_code=skill.code,
         source="other",
         expertise=False,
     )
@@ -432,20 +480,20 @@ async def seed_character_skill(
     return obj
 
 
-async def seed_class_skill(session: AsyncSession, class_def: ClassDefinition, *skills: SkillDefinition) -> None:
+async def seed_class_skill(session: AsyncSession, class_def: ClassDefinition, *skills: Skill) -> None:
     """Link skills to a class's `class_skills` pool (raw association insert, no lazy load)."""
     from app.db.models.compendium import class_skills
     for skill in skills:
-        await session.execute(class_skills.insert().values(class_id=class_def.id, skill_id=skill.id))
+        await session.execute(class_skills.insert().values(class_id=class_def.id, skill_code=skill.code))
     session.expire(class_def, ["skills"])
 
 
 async def seed_background_skill(
-    session: AsyncSession, background: BackgroundDefinition, *skills: SkillDefinition
+    session: AsyncSession, background: BackgroundDefinition, *skills: Skill
 ) -> None:
     from app.db.models.compendium import background_skills
     for skill in skills:
-        await session.execute(background_skills.insert().values(background_id=background.id, skill_id=skill.id))
+        await session.execute(background_skills.insert().values(background_id=background.id, skill_code=skill.code))
     session.expire(background, ["skills"])
 
 

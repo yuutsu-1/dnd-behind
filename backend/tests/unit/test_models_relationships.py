@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import inspect
 
 from app.db.models.campaign import Campaign
-from app.db.models.character import Character, CharacterAbilityScore, CharacterClass, CharacterInventory
+from app.db.models.character import Character, CharacterAbilityScore, CharacterClass, CharacterInventory, CharacterSkill
 from app.db.models.compendium import (
     BackgroundDefinition,
     ClassDefinition,
@@ -92,20 +92,50 @@ class TestCharacterRelationships:
 
 class TestCharacterAbilityScoreRelationship:
     def test_assignable_and_reachable_from_character(self):
-        entry = CharacterAbilityScore(id=uuid.uuid4(), ability_score="STR", value=16)
+        entry = CharacterAbilityScore(id=uuid.uuid4(), ability_code="str", value=16)
         character = Character(
             id=uuid.uuid4(), user_id=uuid.uuid4(), name="Test", ability_scores=[entry]
         )
         assert character.ability_scores == [entry]
         assert entry.character is character
 
-    def test_unique_constraint_on_character_id_and_ability_score(self):
+    def test_unique_constraint_on_character_id_and_ability_code(self):
         constraint_columns = [
             tuple(c.name for c in constraint.columns)
             for constraint in CharacterAbilityScore.__table__.constraints
             if constraint.__class__.__name__ == "UniqueConstraint"
         ]
-        assert ("character_id", "ability_score") in constraint_columns
+        assert ("character_id", "ability_code") in constraint_columns
+
+    def test_ability_code_is_restrict_fk_to_ability_scores(self):
+        table = CharacterAbilityScore.__table__
+        assert "ability_score" not in table.c
+        fk = next(iter(table.c.ability_code.foreign_keys))
+        assert fk.target_fullname == "ability_scores.code"
+        assert fk.ondelete == "RESTRICT"
+
+
+class TestCharacterSkillCode:
+    def test_skill_code_is_restrict_fk_with_unique_per_character(self):
+        table = CharacterSkill.__table__
+        assert "skill_id" not in table.c
+        fk = next(iter(table.c.skill_code.foreign_keys))
+        assert fk.target_fullname == "skills.code"
+        assert fk.ondelete == "RESTRICT"
+        constraint_columns = [
+            tuple(c.name for c in constraint.columns)
+            for constraint in table.constraints
+            if constraint.__class__.__name__ == "UniqueConstraint"
+        ]
+        assert ("character_id", "skill_code") in constraint_columns
+
+    def test_exposes_skill_name_and_ability_code(self):
+        from app.db.models.reference import Skill
+
+        skill = Skill(code="stealth", name="Stealth", ability_code="dex")
+        entry = CharacterSkill(id=uuid.uuid4(), skill_code="stealth", source="other", skill=skill)
+        assert entry.skill_name == "Stealth"
+        assert entry.ability_code == "dex"
 
 
 class TestCharacterClassHitDice:

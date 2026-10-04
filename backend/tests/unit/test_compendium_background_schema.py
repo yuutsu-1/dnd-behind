@@ -4,34 +4,27 @@ import pytest
 from pydantic import ValidationError
 
 from app.db.models.compendium import (
-    AbilityScoreOption,
     BackgroundDefinition,
     BackgroundInitialEquipment,
     FeatDefinition,
     ItemDefinition,
-    SkillDefinition,
-    ToolProficiencyOption,
 )
-from app.enums import AbilityScore
+from app.db.models.reference import Ability, Skill, ToolProficiencyOption
 from app.schemas.compendium import (
     BackgroundCreate,
     BackgroundInitialEquipmentCreate,
     BackgroundOut,
     BackgroundUpdate,
-    SkillCreate,
 )
 
 
 def _noble_kwargs(**overrides) -> dict:
     defaults = dict(
         name="Noble",
-        ability_scores=[AbilityScore.STR, AbilityScore.INT, AbilityScore.CHA],
+        ability_scores=["str", "int", "cha"],
         feat_id=uuid.uuid4(),
-        skills=[
-            SkillCreate(name="History", ability_score=AbilityScore.INT),
-            SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
-        ],
-        tool_proficiencies=["Gaming Set"],
+        skills=["history", "persuasion"],
+        tool_proficiencies=["gaming_set"],
         initial_equipment=[
             BackgroundInitialEquipmentCreate(item_id=uuid.uuid4(), option="A", quantity=1),
             BackgroundInitialEquipmentCreate(item_id=uuid.uuid4(), option="A", quantity=1),
@@ -53,60 +46,43 @@ class TestBackgroundCreateNobleCase:
 class TestBackgroundCreateAbilityScoresCardinality:
     def test_two_ability_scores_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(**_noble_kwargs(ability_scores=[AbilityScore.STR, AbilityScore.INT]))
+            BackgroundCreate(**_noble_kwargs(ability_scores=["str", "int"]))
 
     def test_four_ability_scores_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(
-                **_noble_kwargs(
-                    ability_scores=[AbilityScore.STR, AbilityScore.INT, AbilityScore.CHA, AbilityScore.DEX]
-                )
-            )
+            BackgroundCreate(**_noble_kwargs(ability_scores=["str", "int", "cha", "dex"]))
 
     def test_duplicate_ability_score_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(
-                **_noble_kwargs(ability_scores=[AbilityScore.STR, AbilityScore.STR, AbilityScore.CHA])
-            )
+            BackgroundCreate(**_noble_kwargs(ability_scores=["str", "str", "cha"]))
 
 
 class TestBackgroundCreateSkillsCardinality:
     def test_one_skill_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(
-                **_noble_kwargs(skills=[SkillCreate(name="History", ability_score=AbilityScore.INT)])
-            )
+            BackgroundCreate(**_noble_kwargs(skills=["history"]))
 
     def test_three_skills_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(
-                **_noble_kwargs(
-                    skills=[
-                        SkillCreate(name="History", ability_score=AbilityScore.INT),
-                        SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
-                        SkillCreate(name="Insight", ability_score=AbilityScore.WIS),
-                    ]
-                )
-            )
+            BackgroundCreate(**_noble_kwargs(skills=["history", "persuasion", "insight"]))
 
-    def test_duplicate_skill_name_rejected(self):
+    def test_duplicate_skill_code_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(
-                **_noble_kwargs(
-                    skills=[
-                        SkillCreate(name="History", ability_score=AbilityScore.INT),
-                        SkillCreate(name="History", ability_score=AbilityScore.INT),
-                    ]
-                )
-            )
+            BackgroundCreate(**_noble_kwargs(skills=["history", "history"]))
+
+    def test_inline_skill_definitions_are_no_longer_accepted(self):
+        with pytest.raises(ValidationError):
+            BackgroundCreate(**_noble_kwargs(skills=[
+                {"name": "History", "ability_score": "INT"}, {"name": "Persuasion", "ability_score": "CHA"},
+            ]))
 
 
 class TestBackgroundCreateToolProficiencies:
     def test_multiple_options_accepted(self):
         data = BackgroundCreate(
-            **_noble_kwargs(tool_proficiencies=["Dice Set", "Dragonchess Set", "Playing Card Set"])
+            **_noble_kwargs(tool_proficiencies=["gaming_set", "musical_instrument", "herbalism_kit"])
         )
-        assert data.tool_proficiencies == ["Dice Set", "Dragonchess Set", "Playing Card Set"]
+        assert data.tool_proficiencies == ["gaming_set", "musical_instrument", "herbalism_kit"]
 
     def test_empty_list_rejected(self):
         with pytest.raises(ValidationError):
@@ -114,7 +90,7 @@ class TestBackgroundCreateToolProficiencies:
 
     def test_duplicate_option_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundCreate(**_noble_kwargs(tool_proficiencies=["Dice Set", "Dice Set"]))
+            BackgroundCreate(**_noble_kwargs(tool_proficiencies=["gaming_set", "gaming_set"]))
 
     def test_missing_field_rejected(self):
         kwargs = _noble_kwargs()
@@ -137,16 +113,11 @@ class TestBackgroundUpdatePartial:
 
     def test_partial_ability_scores_with_wrong_cardinality_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundUpdate(ability_scores=[AbilityScore.STR, AbilityScore.INT])
+            BackgroundUpdate(ability_scores=["str", "int"])
 
     def test_partial_skills_with_duplicate_rejected(self):
         with pytest.raises(ValidationError):
-            BackgroundUpdate(
-                skills=[
-                    SkillCreate(name="History", ability_score=AbilityScore.INT),
-                    SkillCreate(name="History", ability_score=AbilityScore.INT),
-                ]
-            )
+            BackgroundUpdate(skills=["history", "history"])
 
     def test_partial_tool_proficiencies_empty_rejected(self):
         with pytest.raises(ValidationError):
@@ -171,9 +142,9 @@ class TestBackgroundOutSerialization:
             name="Noble",
             feat_id=feat.id,
             feat=feat,
-            tool_proficiencies=[ToolProficiencyOption(name="Gaming Set")],
-            ability_scores=[AbilityScoreOption(name="STR"), AbilityScoreOption(name="INT")],
-            skills=[SkillDefinition(id=uuid.uuid4(), name="History", ability_score="INT")],
+            tool_proficiencies=[ToolProficiencyOption(code="gaming_set", name="Gaming Set")],
+            ability_scores=[Ability(code="str", name="Strength"), Ability(code="int", name="Intelligence")],
+            skills=[Skill(code="history", name="History", ability_code="int")],
             initial_equipment=[equipment_entry],
             source="srd",
             is_homebrew=False,
@@ -181,9 +152,9 @@ class TestBackgroundOutSerialization:
 
         out = BackgroundOut.model_validate(background, from_attributes=True)
 
-        assert {a.value for a in out.ability_scores} == {"STR", "INT"}
+        assert set(out.ability_scores) == {"str", "int"}
         assert out.feat_id == feat.id
         assert out.feat_name == "Skilled"
-        assert {s.name for s in out.skills} == {"History"}
-        assert out.tool_proficiencies == ["Gaming Set"]
+        assert [(s.code, s.name, s.ability_code) for s in out.skills] == [("history", "History", "int")]
+        assert out.tool_proficiencies == ["gaming_set"]
         assert out.initial_equipment[0].item_name == "Signet Ring"

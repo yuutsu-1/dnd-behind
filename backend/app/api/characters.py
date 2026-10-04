@@ -88,7 +88,7 @@ async def get_character(character_id: uuid.UUID, current_user: CurrentUser, db: 
 async def update_character(character_id: uuid.UUID, data: CharacterUpdate, current_user: CurrentUser, db: DB):
     character = await char_service.get_character_or_404(db, character_id)
     await char_service.assert_owner_or_dm(db, character, current_user.id)
-    character = await char_service.update_character(db, character, data)
+    character = await char_service.update_character(db, character, data, requester=current_user)
 
     await _broadcast(
         character.campaign_id, "character.update", character.id,
@@ -262,33 +262,33 @@ async def add_character_skill(character_id: uuid.UUID, data: CharacterSkillCreat
     character = await char_service.get_character_or_404(db, character_id)
     await char_service.assert_owner_or_dm(db, character, current_user.id)
 
-    entry = await char_service.add_character_skill(db, character, data)
+    entry = await char_service.add_character_skill(db, character, data, requester=current_user)
 
     await _broadcast(
         character.campaign_id, "character.skill.add", character.id,
-        {"skill_id": str(data.skill_id), "source": data.source},
+        {"skill_code": data.skill_code, "source": data.source},
         current_user.id,
     )
     return entry
 
 
-@router.delete("/{character_id}/skills/{skill_id}", status_code=204)
-async def remove_character_skill(character_id: uuid.UUID, skill_id: uuid.UUID, current_user: CurrentUser, db: DB):
+@router.delete("/{character_id}/skills/{skill_code}", status_code=204)
+async def remove_character_skill(character_id: uuid.UUID, skill_code: str, current_user: CurrentUser, db: DB):
     character = await char_service.get_character_or_404(db, character_id)
     await char_service.assert_owner_or_dm(db, character, current_user.id)
 
-    await char_service.remove_character_skill(db, character, skill_id)
+    await char_service.remove_character_skill(db, character, skill_code)
 
     await _broadcast(
         character.campaign_id, "character.skill.remove", character.id,
-        {"skill_id": str(skill_id)}, current_user.id,
+        {"skill_code": skill_code}, current_user.id,
     )
 
 
-@router.patch("/{character_id}/skills/{skill_id}", response_model=CharacterSkillOut)
+@router.patch("/{character_id}/skills/{skill_code}", response_model=CharacterSkillOut)
 async def update_character_skill_expertise(
     character_id: uuid.UUID,
-    skill_id: uuid.UUID,
+    skill_code: str,
     data: CharacterSkillExpertiseUpdate,
     current_user: CurrentUser,
     db: DB,
@@ -296,11 +296,11 @@ async def update_character_skill_expertise(
     character = await char_service.get_character_or_404(db, character_id)
     await char_service.assert_owner_or_dm(db, character, current_user.id)
 
-    entry = await char_service.set_skill_expertise(db, character, skill_id, data.expertise)
+    entry = await char_service.set_skill_expertise(db, character, skill_code, data.expertise)
 
     await _broadcast(
         character.campaign_id, "character.skill.expertise", character.id,
-        {"skill_id": str(skill_id), "expertise": data.expertise}, current_user.id,
+        {"skill_code": skill_code, "expertise": data.expertise}, current_user.id,
     )
     return entry
 

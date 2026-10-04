@@ -7,8 +7,6 @@ from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DB
 from app.db.models.compendium import (
-    AbilityScoreOption,
-    ArmorProficiencyOption,
     BackgroundDefinition,
     BackgroundInitialEquipment,
     ClassDefinition,
@@ -16,44 +14,42 @@ from app.db.models.compendium import (
     FeatDefinition,
     FeatureGrant,
     ItemDefinition,
-    SkillDefinition,
     SpellDefinition,
     SpeciesDefinition,
     SubclassDefinition,
-    ToolProficiencyOption,
-    WeaponProficiencyOption,
     spell_class_lists,
 )
+from app.db.models.reference import (
+    Ability,
+    ArmorCategory,
+    Size,
+    Skill,
+    ToolProficiencyOption,
+    WeaponCategory,
+)
+from app.db.models.user import User
 from app.schemas.compendium import (
     BackgroundCreate, BackgroundOut, BackgroundUpdate,
     ClassCreate, ClassOut,
     FeatCreate, FeatOut,
     FeatureGrantCreate, FeatureGrantOut,
     ItemCreate, ItemOut,
-    SkillCreate, SkillOut,
     SpellCreate, SpellOut,
     SpeciesCreate, SpeciesOut,
     SubclassCreate, SubclassOut,
 )
-from app.services.compendium import ensure_ability_score_options, resolve_skills
+from app.services.reference import resolve_codes
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
 
-async def _resolve_options(db: AsyncSession, model, names: list[str]) -> list:
-    if not names:
-        return []
-    result = await db.execute(select(model).where(model.name.in_(names)))
-    existing = {obj.name: obj for obj in result.scalars()}
-    output = []
-    for name in names:
-        if name in existing:
-            output.append(existing[name])
-        else:
-            new_obj = model(name=name)
-            db.add(new_obj)
-            await db.flush()
-            output.append(new_obj)
-    return output
+
+async def _resolve(db: AsyncSession, model, codes: list[str], user: User, label: str) -> list:
+    """Reference rows for `codes` (duplicates collapsed); 400 if any is unknown/invisible."""
+    return await resolve_codes(db, model, list(dict.fromkeys(codes)), user, label=label)
+
+
+async def validate_species_size(db: AsyncSession, size_code: str, user: User) -> None:
+    await resolve_codes(db, Size, [size_code], user, label="size")
 
 @router.get("/species", response_model=list[SpeciesOut])
 async def list_species(db: DB, search: str | None = Query(default=None)):
@@ -75,6 +71,7 @@ async def get_species(species_id: uuid.UUID, db: DB):
 
 @router.post("/species", response_model=SpeciesOut, status_code=201)
 async def create_species(data: SpeciesCreate, current_user: CurrentUser, db: DB):
+    await validate_species_size(db, data.size_code, current_user)
     obj = SpeciesDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
     db.add(obj)
     await db.commit()
@@ -101,78 +98,46 @@ async def get_class(class_id: uuid.UUID, db: DB):
 
 @router.post("/classes", response_model=ClassOut, status_code=201)
 async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
-    if data.spell_ability is not None:
-        # `spell_ability` is a FK to `ability_score_options.name`; ensure the
-        # lookup row exists *before* the initial flush below, since it may not
-        # yet be referenced by any primary/saving-throw ability or skill.
-        await ensure_ability_score_options(db, {data.spell_ability.value})
+    # Everything is validated before anything is written; any error rolls back.
+    try:
+        primary_ability = await _resolve(db, Ability, data.primary_ability, current_user, "ability score")
+        saving_throws = await _resolve(db, Ability, data.saving_throw_proficiencies, current_user, "ability score")
+        armor = await _resolve(db, ArmorCategory, data.armor_proficiencies, current_user, "armor category")
+        weapons = await _resolve(db, WeaponCategory, data.weapon_proficiencies, current_user, "weapon category")
+        tools = await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
+        skills = await _resolve(db, Skill, data.skills, current_user, "skill")
+        if data.spell_ability is not None:
+            await _resolve(db, Ability, [data.spell_ability], current_user, "ability score")
+        await _validate_items_exist(db, data.initial_equipment)
 
-    obj = ClassDefinition(
-        name=data.name,
-        description=data.description,
-        hit_die=data.hit_die,
-        skill_choices=data.skill_choices,
-        subclass_level=data.subclass_level,
-        spell_ability=data.spell_ability.value if data.spell_ability else None,
-        spellcasting_type=data.spellcasting_type,
-        is_homebrew=True,
-        created_by=current_user.id,
-    )
-    db.add(obj)
-    await db.flush()
-    # Explicitly (async-safely) load these relationships as empty collections
-    # before reassigning them below -- without this, SQLAlchemy would try to
-    # fetch their "old" value synchronously on first assignment (since the
-    # object became persistent at flush), which fails outside of an awaited
-    # call ("MissingGreenlet").
-    await db.refresh(obj, attribute_names=[
-        "primary_ability", "saving_throw_proficiencies", "armor_proficiencies",
-        "weapon_proficiencies", "tool_proficiencies", "skills",
-    ])
-
-    obj.primary_ability = await _resolve_options(
-        db, AbilityScoreOption, [a.value for a in data.primary_ability]
-    )
-    obj.saving_throw_proficiencies = await _resolve_options(
-        db, AbilityScoreOption, [a.value for a in data.saving_throw_proficiencies]
-    )
-    obj.armor_proficiencies = await _resolve_options(db, ArmorProficiencyOption, data.armor_proficiencies)
-    obj.weapon_proficiencies = await _resolve_options(db, WeaponProficiencyOption, data.weapon_proficiencies)
-    obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
-    obj.skills = await resolve_skills(db, data.skills)
-
-    for equipment in data.initial_equipment:
-        item_result = await db.execute(select(ItemDefinition).where(ItemDefinition.id == equipment.item_id))
-        if not item_result.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail=f"Item {equipment.item_id} not found")
-        db.add(ClassInitialEquipment(
-            class_id=obj.id,
-            item_id=equipment.item_id,
-            option=equipment.option,
-            quantity=equipment.quantity,
-        ))
-
-    await db.commit()
+        obj = ClassDefinition(
+            name=data.name,
+            description=data.description,
+            hit_die=data.hit_die,
+            skill_choices=data.skill_choices,
+            subclass_level=data.subclass_level,
+            spell_ability=data.spell_ability,
+            spellcasting_type=data.spellcasting_type,
+            is_homebrew=True,
+            created_by=current_user.id,
+            primary_ability=primary_ability,
+            saving_throw_proficiencies=saving_throws,
+            armor_proficiencies=armor,
+            weapon_proficiencies=weapons,
+            tool_proficiencies=tools,
+            skills=skills,
+            initial_equipment=[
+                ClassInitialEquipment(item_id=e.item_id, option=e.option, quantity=e.quantity)
+                for e in data.initial_equipment
+            ],
+        )
+        db.add(obj)
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
     await db.refresh(obj)
     return obj
-
-
-@router.get("/skills", response_model=list[SkillOut])
-async def list_skills(db: DB, search: str | None = Query(default=None)):
-    q = select(SkillDefinition)
-    if search:
-        q = q.where(SkillDefinition.name.ilike(f"%{search}%"))
-    result = await db.execute(q)
-    return list(result.scalars().all())
-
-
-@router.post("/skills", response_model=SkillOut, status_code=201)
-async def create_skill(data: SkillCreate, current_user: CurrentUser, db: DB):
-    skills = await resolve_skills(db, [data])
-    await db.commit()
-    skill = skills[0]
-    await db.refresh(skill)
-    return skill
 
 
 @router.get("/subclasses", response_model=list[SubclassOut])
@@ -226,37 +191,33 @@ async def _validate_items_exist(db: AsyncSession, equipment: list) -> None:
 
 @router.post("/backgrounds", response_model=BackgroundOut, status_code=201)
 async def create_background(data: BackgroundCreate, current_user: CurrentUser, db: DB):
-    await _validate_feat_exists(db, data.feat_id)
-    await _validate_items_exist(db, data.initial_equipment)
+    # Everything is validated before anything is written; any error rolls back.
+    try:
+        await _validate_feat_exists(db, data.feat_id)
+        await _validate_items_exist(db, data.initial_equipment)
+        ability_scores = await _resolve(db, Ability, data.ability_scores, current_user, "ability score")
+        skills = await _resolve(db, Skill, data.skills, current_user, "skill")
+        tools = await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
 
-    obj = BackgroundDefinition(
-        name=data.name,
-        description=data.description,
-        feat_id=data.feat_id,
-        is_homebrew=True,
-        created_by=current_user.id,
-    )
-    db.add(obj)
-    await db.flush()
-    # See create_class for why this refresh is required before reassigning
-    # these relationships (avoids MissingGreenlet on first assignment).
-    await db.refresh(obj, attribute_names=["ability_scores", "skills", "tool_proficiencies", "initial_equipment"])
-
-    obj.ability_scores = await _resolve_options(
-        db, AbilityScoreOption, [a.value for a in data.ability_scores]
-    )
-    obj.skills = await resolve_skills(db, data.skills)
-    obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
-
-    for equipment in data.initial_equipment:
-        db.add(BackgroundInitialEquipment(
-            background_id=obj.id,
-            item_id=equipment.item_id,
-            option=equipment.option,
-            quantity=equipment.quantity,
-        ))
-
-    await db.commit()
+        obj = BackgroundDefinition(
+            name=data.name,
+            description=data.description,
+            feat_id=data.feat_id,
+            is_homebrew=True,
+            created_by=current_user.id,
+            ability_scores=ability_scores,
+            skills=skills,
+            tool_proficiencies=tools,
+            initial_equipment=[
+                BackgroundInitialEquipment(item_id=e.item_id, option=e.option, quantity=e.quantity)
+                for e in data.initial_equipment
+            ],
+        )
+        db.add(obj)
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
     await db.refresh(obj)
     return obj
 
@@ -268,37 +229,50 @@ async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, cu
     if not obj:
         raise HTTPException(status_code=404, detail="Background not found")
 
-    if data.feat_id is not None:
-        await _validate_feat_exists(db, data.feat_id)
-        obj.feat_id = data.feat_id
-    if data.initial_equipment is not None:
-        await _validate_items_exist(db, data.initial_equipment)
-
-    if data.name is not None:
-        obj.name = data.name
-    if data.description is not None:
-        obj.description = data.description
-    if data.ability_scores is not None:
-        obj.ability_scores = await _resolve_options(
-            db, AbilityScoreOption, [a.value for a in data.ability_scores]
+    # Validate every referenced id/code before changing anything; any error rolls back.
+    try:
+        if data.feat_id is not None:
+            await _validate_feat_exists(db, data.feat_id)
+        if data.initial_equipment is not None:
+            await _validate_items_exist(db, data.initial_equipment)
+        ability_scores = (
+            await _resolve(db, Ability, data.ability_scores, current_user, "ability score")
+            if data.ability_scores is not None else None
         )
-    if data.tool_proficiencies is not None:
-        obj.tool_proficiencies = await _resolve_options(db, ToolProficiencyOption, data.tool_proficiencies)
-    if data.skills is not None:
-        obj.skills = await resolve_skills(db, data.skills)
-    if data.initial_equipment is not None:
-        for entry in list(obj.initial_equipment):
-            await db.delete(entry)
-        await db.flush()
-        for equipment in data.initial_equipment:
-            db.add(BackgroundInitialEquipment(
-                background_id=obj.id,
-                item_id=equipment.item_id,
-                option=equipment.option,
-                quantity=equipment.quantity,
-            ))
+        skills = await _resolve(db, Skill, data.skills, current_user, "skill") if data.skills is not None else None
+        tools = (
+            await _resolve(db, ToolProficiencyOption, data.tool_proficiencies, current_user, "tool proficiency")
+            if data.tool_proficiencies is not None else None
+        )
 
-    await db.commit()
+        if data.feat_id is not None:
+            obj.feat_id = data.feat_id
+        if data.name is not None:
+            obj.name = data.name
+        if data.description is not None:
+            obj.description = data.description
+        if ability_scores is not None:
+            obj.ability_scores = ability_scores
+        if tools is not None:
+            obj.tool_proficiencies = tools
+        if skills is not None:
+            obj.skills = skills
+        if data.initial_equipment is not None:
+            for entry in list(obj.initial_equipment):
+                await db.delete(entry)
+            await db.flush()
+            for equipment in data.initial_equipment:
+                db.add(BackgroundInitialEquipment(
+                    background_id=obj.id,
+                    item_id=equipment.item_id,
+                    option=equipment.option,
+                    quantity=equipment.quantity,
+                ))
+
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
     await db.refresh(obj)
     return obj
 

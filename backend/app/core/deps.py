@@ -53,6 +53,24 @@ async def get_current_user(
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
+# Same scheme without auto-error: a missing `Authorization` header yields `None`
+# instead of a 401, so read-only endpoints can serve anonymous users.
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+
+async def get_optional_user(
+    token: Annotated[str | None, Depends(oauth2_scheme_optional)],
+    db: DB,
+) -> User | None:
+    """`None` when no token is sent; the user when the token is valid; 401 when a
+    token is sent but is invalid/expired/of the wrong type/of an inactive user."""
+    if token is None:
+        return None
+    return await get_current_user(token=token, db=db)
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
+
 
 async def require_campaign_dm(
     campaign_id: uuid.UUID,

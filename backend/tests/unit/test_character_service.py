@@ -21,6 +21,8 @@ from tests.conftest import (
     make_character_ability_score,
     make_inventory_entry,
     make_result,
+    make_skill,
+    make_srd_abilities,
 )
 
 
@@ -97,21 +99,20 @@ class TestCreateCharacter:
         # `background_id` is now resolved (to derive the automatic background skills),
         # so the lookup must find a (skill-less) background.
         background = BackgroundDefinition(id=uuid.uuid4(), skills=[])
-        fake_db.execute.return_value = make_result(scalar=background)
+        # Every lookup returns the background (scalar) and the SRD abilities (list),
+        # so both the background and the ability-code validation succeed.
+        fake_db.execute.return_value = make_result(scalar=background, scalars_list=make_srd_abilities())
         data = CharacterCreate(
             name="Aragorn",
             species_id=uuid.uuid4(),
             background_id=background.id,
-            ability_scores={"STR": 16, "DEX": 12, "CON": 14, "INT": 10, "WIS": 12, "CHA": 14},
+            ability_scores={"str": 16, "dex": 12, "con": 14, "int": 10, "wis": 12, "cha": 14},
             appearance={"hair": "dark"},
             notes="A ranger",
         )
 
         character = await create_character(fake_db, data, user_id=user_id, campaign_id=campaign_id)
 
-        # `db.add` is also called once per missing `AbilityScoreOption` lookup
-        # row (get-or-create, via `ensure_ability_score_options`); the
-        # character itself must still be among the added objects.
         added_objects = [call.args[0] for call in fake_db.add.call_args_list]
         assert character in added_objects
         assert character.user_id == user_id
@@ -119,7 +120,7 @@ class TestCreateCharacter:
         assert character.name == "Aragorn"
         assert character.species_id == data.species_id
         assert character.background_id == data.background_id
-        assert {row.ability_score: row.value for row in character.ability_scores} == data.ability_scores
+        assert {row.ability_code: row.value for row in character.ability_scores} == data.ability_scores
         assert character.appearance == data.appearance
         assert character.notes == "A ranger"
         fake_db.commit.assert_awaited_once()
@@ -129,16 +130,18 @@ class TestCreateCharacter:
         )
 
     async def test_campaign_id_optional_defaults_to_none(self, fake_db):
+        fake_db.execute.return_value = make_result(scalars_list=make_srd_abilities())
         data = CharacterCreate(name="Solo Hero")
         character = await create_character(fake_db, data, user_id=uuid.uuid4())
         assert character.campaign_id is None
 
     async def test_uses_default_ability_scores_when_not_provided(self, fake_db):
+        fake_db.execute.return_value = make_result(scalars_list=make_srd_abilities())
         data = CharacterCreate(name="Solo Hero")
         character = await create_character(fake_db, data, user_id=uuid.uuid4())
 
-        scores = {row.ability_score: row.value for row in character.ability_scores}
-        assert scores == {"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+        scores = {row.ability_code: row.value for row in character.ability_scores}
+        assert scores == {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
 
 
 class TestUpdateCharacter:
@@ -165,34 +168,36 @@ class TestUpdateCharacter:
 
     async def test_ability_scores_partial_update_upserts_only_provided_ability(self, fake_db):
         character = make_character(
-            ability_scores={"STR": 10, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+            ability_scores={"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
         )
-        update = CharacterUpdate(ability_scores={"STR": 18})
+        update = CharacterUpdate(ability_scores={"str": 18})
+        fake_db.execute.return_value = make_result(scalars_list=make_srd_abilities())
 
         result = await update_character(fake_db, character, update)
 
-        scores = {row.ability_score: row.value for row in result.ability_scores}
-        assert scores == {"STR": 18, "DEX": 10, "CON": 10, "INT": 10, "WIS": 10, "CHA": 10}
+        scores = {row.ability_code: row.value for row in result.ability_scores}
+        assert scores == {"str": 18, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10}
 
     async def test_ability_scores_update_creates_missing_ability_row(self, fake_db):
         character = make_character(
-            ability_scores=[make_character_ability_score(ability_score="STR", value=10)]
+            ability_scores=[make_character_ability_score(ability_code="str", value=10)]
         )
-        update = CharacterUpdate(ability_scores={"DEX": 14})
+        update = CharacterUpdate(ability_scores={"dex": 14})
+        fake_db.execute.return_value = make_result(scalars_list=make_srd_abilities())
 
         result = await update_character(fake_db, character, update)
 
-        scores = {row.ability_score: row.value for row in result.ability_scores}
-        assert scores == {"STR": 10, "DEX": 14}
+        scores = {row.ability_code: row.value for row in result.ability_scores}
+        assert scores == {"str": 10, "dex": 14}
 
     async def test_ability_scores_omitted_from_payload_leaves_existing_untouched(self, fake_db):
-        character = make_character(ability_scores={"STR": 16})
+        character = make_character(ability_scores={"str": 16})
         update = CharacterUpdate(name="Renamed")
 
         result = await update_character(fake_db, character, update)
 
-        scores = {row.ability_score: row.value for row in result.ability_scores}
-        assert scores == {"STR": 16}
+        scores = {row.ability_code: row.value for row in result.ability_scores}
+        assert scores == {"str": 16}
 
 
 class TestApplyHPUpdate:
@@ -340,66 +345,67 @@ class TestListCharactersForCampaign:
 
 
 class TestCharacterSkillService:
-    async def test_add_skill_unknown_skill_404(self, fake_db):
+    async def test_add_skill_unknown_skill_400(self, fake_db):
+        # Unknown (or invisible) codes are a 400, like every code reference.
         from app.schemas.character import CharacterSkillCreate
         from app.services.character import add_character_skill
 
         fake_db.execute.return_value = make_result(scalar=None)
         with pytest.raises(HTTPException) as exc_info:
             await add_character_skill(
-                fake_db, make_character(), CharacterSkillCreate(skill_id=uuid.uuid4(), source="other")
+                fake_db, make_character(), CharacterSkillCreate(skill_code="no_such_skill", source="other")
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 400
         fake_db.commit.assert_not_awaited()
 
     async def test_add_class_skill_without_class_400(self, fake_db):
-        from app.db.models.compendium import SkillDefinition
         from app.schemas.character import CharacterSkillCreate
         from app.services.character import add_character_skill
 
-        skill = SkillDefinition(id=uuid.uuid4(), name="Arcana", ability_score="INT")
-        fake_db.execute.return_value = make_result(scalar=skill)
+        skill = make_skill(code="arcana", name="Arcana", ability_code="int")
+        fake_db.execute.return_value = make_result(scalar=skill, scalars_list=[skill])
         with pytest.raises(HTTPException) as exc_info:
             await add_character_skill(
-                fake_db, make_character(), CharacterSkillCreate(skill_id=skill.id, source="class")
+                fake_db, make_character(), CharacterSkillCreate(skill_code=skill.code, source="class")
             )
         assert exc_info.value.status_code == 400
         fake_db.commit.assert_not_awaited()
 
     async def test_add_skill_commits_and_attaches_row(self, fake_db):
-        from app.db.models.compendium import SkillDefinition
         from app.schemas.character import CharacterSkillCreate
         from app.services.character import add_character_skill
 
-        skill = SkillDefinition(id=uuid.uuid4(), name="Arcana", ability_score="INT")
-        fake_db.execute.return_value = make_result(scalar=skill)
+        skill = make_skill(code="arcana", name="Arcana", ability_code="int")
+        fake_db.execute.return_value = make_result(scalar=skill, scalars_list=[skill])
         character = make_character()
 
         entry = await add_character_skill(
-            fake_db, character, CharacterSkillCreate(skill_id=skill.id, source="feat")
+            fake_db, character, CharacterSkillCreate(skill_code=skill.code, source="feat")
         )
 
         assert entry in character.skills
-        assert (entry.skill_name, entry.ability_score, entry.expertise) == ("Arcana", "INT", False)
+        assert (entry.skill_name, entry.ability_code, entry.expertise) == ("Arcana", "int", False)
         fake_db.commit.assert_awaited_once()
 
     async def test_remove_skill_not_owned_404(self, fake_db):
         from app.services.character import remove_character_skill
 
         with pytest.raises(HTTPException) as exc_info:
-            await remove_character_skill(fake_db, make_character(), uuid.uuid4())
+            await remove_character_skill(fake_db, make_character(), "arcana")
         assert exc_info.value.status_code == 404
 
     async def test_create_character_rolls_back_on_validation_failure(self, fake_db):
         from app.schemas.character import CharacterSkillCreate
 
         fake_db.execute.return_value = make_result(scalar=None)  # skill lookup finds nothing
-        data = CharacterCreate(name="X", skills=[CharacterSkillCreate(skill_id=uuid.uuid4(), source="other")])
+        data = CharacterCreate(
+            name="X", ability_scores={}, skills=[CharacterSkillCreate(skill_code="no_such_skill", source="other")]
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             await create_character(fake_db, data, user_id=uuid.uuid4())
 
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 400
         fake_db.rollback.assert_awaited_once()
         fake_db.commit.assert_not_awaited()
 

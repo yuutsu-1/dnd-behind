@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api import auth, campaigns, characters, compendium, ws
+from app.api import auth, campaigns, characters, compendium, reference, ws
 
 app = FastAPI(
     title="DnD Behind — Character Manager API",
@@ -23,6 +23,7 @@ app.include_router(auth.router, prefix="/api")
 app.include_router(campaigns.router, prefix="/api")
 app.include_router(characters.router, prefix="/api")
 app.include_router(compendium.router, prefix="/api")
+app.include_router(reference.router, prefix="/api")
 app.include_router(ws.router)  # WebSocket has no /api prefix — avoids proxy issues
 
 

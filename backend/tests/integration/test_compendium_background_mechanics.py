@@ -11,19 +11,20 @@ from app.db.models.compendium import (
     background_skills,
     background_tool_proficiencies,
 )
-from app.enums import AbilityScore
+from app.db.models.compendium import BackgroundDefinition
+from app.db.models.reference import Skill
 from app.schemas.compendium import (
     BackgroundCreate,
     BackgroundInitialEquipmentCreate,
     BackgroundOut,
     BackgroundUpdate,
-    SkillCreate,
 )
 from tests.integration.conftest import (
     seed_background,
     seed_background_initial_equipment,
     seed_feat,
     seed_item,
+    seed_reference,
     seed_user,
 )
 
@@ -32,13 +33,10 @@ def _noble_kwargs(feat_id: uuid.UUID, item_ids: list[uuid.UUID], **overrides) ->
     defaults = dict(
         name=f"Noble-{uuid.uuid4().hex[:10]}",
         description="Born to a family of wealth and influence.",
-        ability_scores=[AbilityScore.STR, AbilityScore.INT, AbilityScore.CHA],
+        ability_scores=["str", "int", "cha"],
         feat_id=feat_id,
-        skills=[
-            SkillCreate(name="History", ability_score=AbilityScore.INT),
-            SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
-        ],
-        tool_proficiencies=["Gaming Set"],
+        skills=["history", "persuasion"],
+        tool_proficiencies=["gaming_set"],
         initial_equipment=[
             BackgroundInitialEquipmentCreate(item_id=item_ids[0], option="A", quantity=1),
             BackgroundInitialEquipmentCreate(item_id=item_ids[1], option="A", quantity=1),
@@ -63,11 +61,12 @@ class TestCreateBackgroundNobleCase:
 
         obj = await create_background(data, current_user=creator, db=db_session)
 
-        assert {a.name for a in obj.ability_scores} == {"STR", "INT", "CHA"}
+        out = BackgroundOut.model_validate(obj)
+        assert set(out.ability_scores) == {"str", "int", "cha"}
         assert obj.feat_id == feat.id
         assert obj.feat_name == "Skilled"
-        assert {s.name for s in obj.skills} == {"History", "Persuasion"}
-        assert [t.name for t in obj.tool_proficiencies] == ["Gaming Set"]
+        assert {(s.code, s.ability_code) for s in out.skills} == {("history", "int"), ("persuasion", "cha")}
+        assert out.tool_proficiencies == ["gaming_set"]
         assert len(obj.initial_equipment) == 3
         assert {e.item_name for e in obj.initial_equipment} == {"Fine Clothes", "Signet Ring", "Purse"}
 
@@ -76,14 +75,14 @@ class TestCreateBackgroundNobleCase:
         creator = await seed_user(db_session)
         feat = await seed_feat(db_session)
         items = [await seed_item(db_session) for _ in range(3)]
-        options = ["Dice Set", "Dragonchess Set", "Playing Card Set"]
+        options = ["gaming_set", "musical_instrument", "herbalism_kit"]
 
         data = BackgroundCreate(
             **_noble_kwargs(feat.id, [i.id for i in items], tool_proficiencies=options)
         )
         obj = await create_background(data, current_user=creator, db=db_session)
 
-        assert {t.name for t in obj.tool_proficiencies} == set(options)
+        assert {t.code for t in obj.tool_proficiencies} == set(options)
 
     async def test_response_serializes_when_items_not_in_session(self, db_session):
         # Regression: lazy `item` load during response serialization raised
@@ -111,26 +110,20 @@ class TestCreateBackgroundValidation:
         with pytest.raises(ValueError):
             BackgroundCreate(
                 name="Bad",
-                ability_scores=[AbilityScore.STR, AbilityScore.INT],
+                ability_scores=["str", "int"],
                 feat_id=uuid.uuid4(),
-                skills=[
-                    SkillCreate(name="History", ability_score=AbilityScore.INT),
-                    SkillCreate(name="Persuasion", ability_score=AbilityScore.CHA),
-                ],
-                tool_proficiencies=["Gaming Set"],
+                skills=["history", "persuasion"],
+                tool_proficiencies=["gaming_set"],
             )
 
     async def test_skills_duplicate_rejected_by_schema(self):
         with pytest.raises(ValueError):
             BackgroundCreate(
                 name="Bad",
-                ability_scores=[AbilityScore.STR, AbilityScore.INT, AbilityScore.CHA],
+                ability_scores=["str", "int", "cha"],
                 feat_id=uuid.uuid4(),
-                skills=[
-                    SkillCreate(name="History", ability_score=AbilityScore.INT),
-                    SkillCreate(name="History", ability_score=AbilityScore.INT),
-                ],
-                tool_proficiencies=["Gaming Set"],
+                skills=["history", "history"],
+                tool_proficiencies=["gaming_set"],
             )
 
     async def test_nonexistent_feat_id_is_rejected_with_400(self, db_session):
@@ -244,12 +237,12 @@ class TestUpdateBackground:
         obj = await create_background(data, current_user=creator, db=db_session)
 
         updated = await update_background(
-            obj.id, BackgroundUpdate(tool_proficiencies=["Musical Instrument"]), current_user=creator, db=db_session
+            obj.id, BackgroundUpdate(tool_proficiencies=["musical_instrument"]), current_user=creator, db=db_session
         )
 
-        assert [t.name for t in updated.tool_proficiencies] == ["Musical Instrument"]
+        assert [t.code for t in updated.tool_proficiencies] == ["musical_instrument"]
         # Unrelated fields untouched.
-        assert {a.name for a in updated.ability_scores} == {"STR", "INT", "CHA"}
+        assert {a.code for a in updated.ability_scores} == {"str", "int", "cha"}
 
     async def test_partial_update_of_ability_scores(self, db_session):
         creator = await seed_user(db_session)
@@ -264,12 +257,12 @@ class TestUpdateBackground:
 
         updated = await update_background(
             obj.id,
-            BackgroundUpdate(ability_scores=[AbilityScore.DEX, AbilityScore.WIS, AbilityScore.CON]),
+            BackgroundUpdate(ability_scores=["dex", "wis", "con"]),
             current_user=creator,
             db=db_session,
         )
 
-        assert {a.name for a in updated.ability_scores} == {"DEX", "WIS", "CON"}
+        assert {a.code for a in updated.ability_scores} == {"dex", "wis", "con"}
 
     async def test_missing_background_raises_404(self, db_session):
         creator = await seed_user(db_session)
@@ -359,3 +352,91 @@ class TestUpdateBackground:
         assert fine_clothes.id not in by_item_id
         assert signet_ring.id not in by_item_id
         assert purse.id not in by_item_id
+
+
+async def _background_count(db_session, name: str) -> int:
+    from sqlalchemy import func
+    return (await db_session.execute(
+        select(func.count()).select_from(BackgroundDefinition).where(BackgroundDefinition.name == name)
+    )).scalar_one()
+
+
+class TestBackgroundCodes:
+    @pytest.mark.parametrize("field,value", [
+        ("ability_scores", ["STR", "int", "cha"]),
+        ("ability_scores", ["str", "int", "luck"]),
+        ("skills", ["history", "psionics"]),
+        ("tool_proficiencies", ["dice_set"]),
+    ])
+    async def test_create_with_unknown_code_is_400_and_writes_nothing(self, db_session, field, value):
+        creator = await seed_user(db_session)
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        await db_session.commit()
+        data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], **{field: value}))
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_background(data, current_user=creator, db=db_session)
+
+        assert exc_info.value.status_code == 400
+        assert await _background_count(db_session, data.name) == 0
+
+    async def test_invisible_homebrew_skill_is_400(self, db_session):
+        author = await seed_user(db_session)
+        outsider = await seed_user(db_session)
+        hidden = await seed_reference(db_session, Skill, author=author, ability_code="int")
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], skills=["history", hidden.code]))
+        await db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_background(data, current_user=outsider, db=db_session)
+        assert exc_info.value.status_code == 400
+
+    async def test_own_homebrew_skill_is_accepted(self, db_session):
+        author = await seed_user(db_session)
+        mine = await seed_reference(db_session, Skill, author=author, ability_code="int")
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        data = BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items], skills=["history", mine.code]))
+
+        obj = await create_background(data, current_user=author, db=db_session)
+        assert {s.code for s in obj.skills} == {"history", mine.code}
+
+    @pytest.mark.parametrize("update", [
+        BackgroundUpdate(ability_scores=["dex", "wis", "luck"]),
+        BackgroundUpdate(skills=["history", "psionics"]),
+        BackgroundUpdate(tool_proficiencies=["dice_set"]),
+        BackgroundUpdate(name="Renamed", skills=["nope", "history"]),
+    ])
+    async def test_update_with_unknown_code_is_400_and_changes_nothing(self, db_session, update):
+        creator = await seed_user(db_session)
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        obj = await create_background(
+            BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items])), current_user=creator, db=db_session
+        )
+        background_id, original_name = obj.id, obj.name
+
+        with pytest.raises(HTTPException) as exc_info:
+            await update_background(background_id, update, current_user=creator, db=db_session)
+        assert exc_info.value.status_code == 400
+
+        fetched = BackgroundOut.model_validate(await get_background(background_id, db=db_session))
+        assert fetched.name == original_name
+        assert set(fetched.ability_scores) == {"str", "int", "cha"}
+        assert {s.code for s in fetched.skills} == {"history", "persuasion"}
+        assert fetched.tool_proficiencies == ["gaming_set"]
+
+    async def test_update_with_valid_codes(self, db_session):
+        creator = await seed_user(db_session)
+        feat = await seed_feat(db_session)
+        items = [await seed_item(db_session) for _ in range(3)]
+        obj = await create_background(
+            BackgroundCreate(**_noble_kwargs(feat.id, [i.id for i in items])), current_user=creator, db=db_session
+        )
+        updated = await update_background(
+            obj.id, BackgroundUpdate(skills=["insight", "religion"]), current_user=creator, db=db_session
+        )
+        assert {s.code for s in BackgroundOut.model_validate(updated).skills} == {"insight", "religion"}

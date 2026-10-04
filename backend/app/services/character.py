@@ -14,7 +14,8 @@ from app.db.models.character import (
     CharacterSkill,
 )
 from app.db.models.campaign import CampaignMember
-from app.db.models.compendium import BackgroundDefinition, ClassDefinition, SkillDefinition, SubclassDefinition
+from app.db.models.compendium import BackgroundDefinition, ClassDefinition, SubclassDefinition
+from app.db.models.reference import Ability, Skill
 from app.schemas.character import (
     AddItemRequest,
     CharacterClassCreate,
@@ -25,7 +26,7 @@ from app.schemas.character import (
     HitDiceUsedUpdate,
     HPUpdate,
 )
-from app.services.compendium import ensure_ability_score_options
+from app.services.reference import Viewer, resolve_codes
 
 MAX_TOTAL_LEVEL = 20
 
@@ -86,9 +87,10 @@ async def create_character(
 ) -> Character:
     # Everything (character, initial class, skills) is validated before the
     # character is added to the session and persisted by a single commit; any
-    # validation failure rolls the whole transaction back.
+    # validation failure rolls the whole transaction back. Codes are resolved
+    # with the visibility of the creating user (the owner).
     try:
-        await ensure_ability_score_options(db, set(data.ability_scores.keys()))
+        await _validate_ability_codes(db, data.ability_scores, user_id)
         character = Character(
             user_id=user_id,
             campaign_id=campaign_id,
@@ -96,8 +98,8 @@ async def create_character(
             species_id=data.species_id,
             background_id=data.background_id,
             ability_scores=[
-                CharacterAbilityScore(ability_score=name, value=value)
-                for name, value in data.ability_scores.items()
+                CharacterAbilityScore(ability_code=code, value=value)
+                for code, value in data.ability_scores.items()
             ],
             appearance=data.appearance,
             notes=data.notes,
@@ -119,7 +121,7 @@ async def create_character(
             await _sync_background_skills(db, character, data.background_id)
 
         for item in data.skills:
-            await _build_character_skill(db, character, item.skill_id, item.source)
+            await _build_character_skill(db, character, item.skill_code, item.source, user_id)
 
         db.add(character)
         await db.commit()
@@ -137,28 +139,36 @@ async def update_character(
     db: AsyncSession,
     character: Character,
     data: CharacterUpdate,
+    requester: Viewer = None,
 ) -> Character:
+    """`requester` is whoever makes the request (owner or DM): ability codes are
+    resolved with their visibility."""
     update_data = data.model_dump(exclude_none=True)
     ability_scores_update = update_data.pop("ability_scores", None)
     new_background_id = update_data.pop("background_id", None)
 
-    if new_background_id is not None and new_background_id != character.background_id:
-        await _sync_background_skills(db, character, new_background_id)
-        character.background_id = new_background_id
+    try:
+        if ability_scores_update:
+            await _validate_ability_codes(db, ability_scores_update, requester)
+
+        if new_background_id is not None and new_background_id != character.background_id:
+            await _sync_background_skills(db, character, new_background_id)
+            character.background_id = new_background_id
+    except HTTPException:
+        await db.rollback()
+        raise
 
     for field, value in update_data.items():
         setattr(character, field, value)
 
     if ability_scores_update:
-        existing_by_ability = {row.ability_score: row for row in character.ability_scores}
-        new_ability_names = set(ability_scores_update.keys()) - set(existing_by_ability.keys())
-        await ensure_ability_score_options(db, new_ability_names)
+        existing_by_ability = {row.ability_code: row for row in character.ability_scores}
         for ability, value in ability_scores_update.items():
             if ability in existing_by_ability:
                 existing_by_ability[ability].value = value
             else:
                 character.ability_scores.append(
-                    CharacterAbilityScore(character_id=character.id, ability_score=ability, value=value)
+                    CharacterAbilityScore(character_id=character.id, ability_code=ability, value=value)
                 )
 
     await db.commit()
@@ -166,12 +176,14 @@ async def update_character(
     return character
 
 
-async def _get_skill_or_404(db: AsyncSession, skill_id: uuid.UUID) -> SkillDefinition:
-    result = await db.execute(select(SkillDefinition).where(SkillDefinition.id == skill_id))
-    skill = result.scalar_one_or_none()
-    if not skill:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-    return skill
+async def _validate_ability_codes(db: AsyncSession, scores: dict, viewer: Viewer) -> None:
+    """Every key must be an `ability_scores` code visible to `viewer` (400 otherwise)."""
+    await resolve_codes(db, Ability, list(scores.keys()), viewer, label="ability score")
+
+
+async def _get_skill(db: AsyncSession, skill_code: str, viewer: Viewer) -> Skill:
+    """The skill row for `skill_code`; 400 if it doesn't exist or isn't visible to `viewer`."""
+    return (await resolve_codes(db, Skill, [skill_code], viewer, label="skill"))[0]
 
 
 async def _get_background_or_404(db: AsyncSession, background_id: uuid.UUID) -> BackgroundDefinition:
@@ -189,15 +201,16 @@ def _bad_request(detail: str) -> HTTPException:
 async def _build_character_skill(
     db: AsyncSession,
     character: Character,
-    skill_id: uuid.UUID,
+    skill_code: str,
     source: str,
+    viewer: Viewer = None,
 ) -> CharacterSkill:
     """Validate the rules for giving `character` a skill from `source` and append the
     new row to `character.skills` (no commit). Works for persisted and not-yet-persisted
     characters, so batch creation and the sub-resource endpoint share the same rules."""
-    skill = await _get_skill_or_404(db, skill_id)
+    skill = await _get_skill(db, skill_code, viewer)
 
-    if any(row.skill_id == skill.id for row in character.skills):
+    if any(row.skill_code == skill.code for row in character.skills):
         raise _bad_request("Character already has this skill")
 
     if source == "class":
@@ -205,7 +218,7 @@ async def _build_character_skill(
             raise _bad_request("Character has no class that grants skills")
         # Only the first class (starting class) grants skill proficiencies.
         klass = character.classes[0].class_
-        if skill.id not in {s.id for s in klass.skills}:
+        if skill.code not in {s.code for s in klass.skills}:
             raise _bad_request("Skill is not in the first class's skill list")
         already_from_class = sum(1 for row in character.skills if row.source == "class")
         if already_from_class + 1 > klass.skill_choices:
@@ -214,10 +227,10 @@ async def _build_character_skill(
         if character.background_id is None:
             raise _bad_request("Character has no background")
         background = await _get_background_or_404(db, character.background_id)
-        if skill.id not in {s.id for s in background.skills}:
+        if skill.code not in {s.code for s in background.skills}:
             raise _bad_request("Skill does not belong to the character's background")
 
-    entry = CharacterSkill(skill_id=skill.id, source=source, expertise=False, skill=skill)
+    entry = CharacterSkill(skill_code=skill.code, source=source, expertise=False, skill=skill)
     character.skills.append(entry)
     return entry
 
@@ -231,24 +244,27 @@ async def _sync_background_skills(
     Rows from other sources are never touched; skills already owned through another
     source are not duplicated."""
     background = await _get_background_or_404(db, new_background_id)
-    new_skill_ids = {s.id for s in background.skills}
+    new_skill_codes = {s.code for s in background.skills}
 
     for row in list(character.skills):
-        if row.source == "background" and row.skill_id not in new_skill_ids:
+        if row.source == "background" and row.skill_code not in new_skill_codes:
             character.skills.remove(row)
 
-    owned = {row.skill_id for row in character.skills}
+    owned = {row.skill_code for row in character.skills}
     for skill in background.skills:
-        if skill.id not in owned:
-            character.skills.append(CharacterSkill(skill_id=skill.id, source="background", expertise=False, skill=skill))
+        if skill.code not in owned:
+            character.skills.append(
+                CharacterSkill(skill_code=skill.code, source="background", expertise=False, skill=skill)
+            )
 
 
 async def add_character_skill(
     db: AsyncSession,
     character: Character,
     data: CharacterSkillCreate,
+    requester: Viewer = None,
 ) -> CharacterSkill:
-    entry = await _build_character_skill(db, character, data.skill_id, data.source)
+    entry = await _build_character_skill(db, character, data.skill_code, data.source, requester)
     try:
         await db.commit()
     except IntegrityError:
@@ -261,9 +277,9 @@ async def add_character_skill(
 async def remove_character_skill(
     db: AsyncSession,
     character: Character,
-    skill_id: uuid.UUID,
+    skill_code: str,
 ) -> None:
-    entry = next((row for row in character.skills if row.skill_id == skill_id), None)
+    entry = next((row for row in character.skills if row.skill_code == skill_code), None)
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character does not have this skill")
     character.skills.remove(entry)  # delete-orphan removes the row
@@ -273,12 +289,12 @@ async def remove_character_skill(
 async def set_skill_expertise(
     db: AsyncSession,
     character: Character,
-    skill_id: uuid.UUID,
+    skill_code: str,
     expertise: bool,
 ) -> CharacterSkill:
     # Expertise is not restricted by class or quantity: class features/feats that grant
     # it belong to the (out of scope) feature engine.
-    entry = next((row for row in character.skills if row.skill_id == skill_id), None)
+    entry = next((row for row in character.skills if row.skill_code == skill_code), None)
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character does not have this skill")
     entry.expertise = expertise

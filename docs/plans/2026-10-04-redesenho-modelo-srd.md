@@ -275,7 +275,6 @@ O desenho parte da leitura dos 13 arquivos de `docs/dnd-5e-srd-markdown-master/`
 | `heroic_inspiration` | — |
 | `alignment_code` | — |
 | `size_code` | tamanho escolhido |
-| `ability_generation_method` | — |
 | campos de aparência | só os da etapa "Details" de `character-creation.md` que forem confirmados na fase |
 
 **Novas tabelas**
@@ -291,6 +290,16 @@ O desenho parte da leitura dos 13 arquivos de `docs/dnd-5e-srd-markdown-master/`
 **Ajustes**
 - `CharacterResource` passa a apontar para `feature_resources`.
 - `Campaign.settings` é removido. Colunas tipadas entram quando houver configurações definidas.
+
+**Gaps encontrados no teste pós-fase 2 (2026-10-05)**
+
+O cenário Fighter + Soldier + personagem foi montado só com os endpoints. Ele expôs três gaps de personagem que entram na fase 7:
+
+- **HP máximo não é calculado.** O personagem nasce com HP 0/0. No nível 1 o HP máximo é o máximo do dado de vida + mod. de CON (Fighter com CON 15 = 10 + 2 = 12). Nos níveis seguintes soma-se o valor rolado ou o fixo (`character_level_ups`) + mod. de CON. Um aumento de CON vale retroativamente.
+- **Equipamento inicial não é aplicado pela opção escolhida.** Hoje cada item é adicionado à mão no inventário. O personagem deve escolher a opção (A/B/C) da classe e a opção (A/B) do antecedente, e o inventário deve ser preenchido a partir dela. Entradas dependentes de escolha, como o "Gaming Set (same as above)" do Soldier, devem sair da escolha de ferramenta do personagem.
+- **O talento do antecedente não chega ao personagem.** O Savage Attacker do Soldier não aparece no personagem, e a resposta da API não tem campo de talentos. O talento de origem do antecedente deve ser concedido automaticamente (`character_feats`, origem `background`) e exposto na resposta.
+
+Fora do modelo por decisão do usuário: **não registrar o método de geração de atributos** (standard array, point buy ou rolagem). Guarda-se só o valor base e os aumentos com origem (`character_ability_increases`).
 
 ### 9. Monstros (novo)
 

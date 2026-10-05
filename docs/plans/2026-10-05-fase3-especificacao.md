@@ -22,6 +22,40 @@ Todas seguem o default recomendado:
 - **D8:** dano, salvaguarda e ataque ficam só no texto nesta fase.
 - **Extra:** PATCH e DELETE de magia homebrew seguem exatamente o padrão de `/items`.
 
+## REVISÃO DO USUÁRIO NO GATE #2 (2026-10-05) — PREVALECE SOBRE O RESTO DO DOCUMENTO
+
+**Princípio:** só ganha estrutura própria o que afeta a mecânica ou leva uma informação específica para a ficha. O que é só exibição vira uma coluna de texto. Aplicado às magias:
+
+| Campo | Novo modelo | Observação |
+|---|---|---|
+| Duração | `duration` (texto, NOT NULL), ex. "Concentration, up to 1 minute", "Until dispelled or triggered" | Saem `duration_types`, `duration_amount`, `duration_unit_code` e as regras de coerência de duração |
+| Concentração | `concentration` (bool) | Mantido, porque é mecânica |
+| Alcance | `range` (texto, NOT NULL), ex. "90 feet", "Self", "1 mile" | Saem `range_types`, `range_ft` e as regras de coerência de alcance |
+| Área | `area` (texto, nullable), ex. "20-foot radius", "100-foot Line, 5 feet wide" | Preenchido só quando a magia **afeta** uma área. Teleportation Circle não é área; Light é "20-foot radius" |
+| Forma da área | `area_shape_code` (FK `area_shapes`, nullable, obrigatório quando houver `area`) | Palavra-chave que define o ícone na ficha |
+| Tempo de conjuração | `casting_time_code` (FK, NOT NULL) para a nova referência `casting_times` | Um campo só |
+| Gatilho | **sem campo** (decisão do usuário) | Nas 8 magias com condição de conjuração (4 reações e 4 smites), a linha original do tempo de conjuração, por exemplo "Casting Time: Reaction, which you take when …", é anexada ao fim de `description`, igual ao Plant Growth |
+| Ritual | `ritual` (bool) | Mantido |
+
+- **`area_shapes`, seed:** cone, cube, cylinder, emanation, line, sphere, mais as palavras-chave que aparecem de fato nas áreas do SRD: `radius` e `square`. Não entra nenhuma forma que não esteja no texto.
+- **`casting_times`, seed:** action, bonus_action, reaction, `1_minute`, `10_minutes`, `1_hour`, `8_hours`, `12_hours`, `24_hours`, todos derivados dos tempos que existem no SRD. Não tem colunas extras.
+- **Plant Growth:** `casting_time_code=action`, e a linha original do tempo de conjuração vai ao fim de `description`.
+- **Saem:** as referências `time_units`, `range_types` e `duration_types`, as colunas `casting_action_type_code`, `casting_time_amount` e `casting_time_unit_code`, e a tabela `spell_areas`. Com isso `REFERENCE_MODELS` passa de 24 para **27** (+ `area_shapes`, `spell_lists`, `casting_times`).
+- **Ficam como estão:** `spell_materials` (D7), `spell_lists` + `spell_list_spells` (D1), seed das 339 magias (D2), `has_verbal`/`has_somatic`/`has_material`, `higher_levels`/`cantrip_upgrade`, e a matriz de PATCH/DELETE.
+- **Listas (H4):** valem os cabeçalhos do `spells.md`. Phantasmal Force entra em Bard/Sorcerer/Wizard e Mind Spike em Sorcerer, mesmo divergindo das tabelas do `classes.md`.
+- **Invocações:** os stat blocks embutidos (Animate Objects, Find Steed, Giant Insect, Summon Dragon) **saem** de `description`. Na fase 8 eles entram como monstros genéricos e a magia passa a referenciá-los. Nada de JSON em coluna.
+- **Áreas (H8):** o usuário aceitou o critério do planejador (91 magias com área) e corrige depois, se precisar. O que importa é a modelagem estar certa.
+- **B13:** só se aplica a magias com área. `area` e `area_shape_code` vão juntos, e uma magia sem área deixa os dois vazios.
+- **Testes e documentação:** **nenhum teste lê `docs/`**, que existe só como referência. O seed é conferido por testes com números e valores fixos. O extrator é uma ferramenta de desenvolvimento, rodada à mão, que gera o módulo de dados versionado.
+- **Critérios de contagem:** saem os de `until_dispelled` e de tipo de duração/alcance. Entram:
+  - 339 magias;
+  - 27 truques;
+  - 29 rituais;
+  - 4 `reaction` com gatilho;
+  - 133 com concentração;
+  - 124 com `higher_levels` ou `cantrip_upgrade`;
+  - toda magia SRD com pelo menos uma lista.
+
 ## Objetivo
 
 Trocar a representação de `spell_definitions`, hoje em texto e JSONB, por colunas tipadas, com uma informação por coluna:

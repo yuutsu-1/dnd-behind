@@ -14,7 +14,7 @@ from app.db.models.reference import AreaShape, CastingTime, SpellList, SpellScho
 from app.db.models.spells import SpellMaterial, spell_list_spells
 from app.db.models.user import User
 from app.schemas.spells import SpellCreate, SpellUpdate
-from app.services.items import _escape_like
+from app.services.search import name_contains
 from app.services.reference import resolve_codes
 
 
@@ -48,7 +48,7 @@ async def list_spells(
     if ritual is not None:
         query = query.where(SpellDefinition.ritual.is_(ritual))
     if search:
-        query = query.where(SpellDefinition.name.ilike(f"%{_escape_like(search)}%", escape="\\"))
+        query = query.where(name_contains(SpellDefinition.name, search))
     query = query.options(*_load_options()).order_by(
         SpellDefinition.level, SpellDefinition.name, SpellDefinition.id
     )

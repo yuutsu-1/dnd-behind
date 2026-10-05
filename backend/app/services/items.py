@@ -30,11 +30,7 @@ from app.schemas.items import (
     WeaponPropertyIn,
 )
 from app.services.reference import resolve_codes
-
-
-def _escape_like(term: str) -> str:
-    """Make LIKE wildcards in a search term literal (`_` and `%` match themselves)."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+from app.services.search import name_contains
 
 
 def _load_options() -> tuple:
@@ -63,7 +59,7 @@ async def list_items(
     if item_type:
         query = query.where(ItemDefinition.item_type_code == item_type)
     if search:
-        query = query.where(ItemDefinition.name.ilike(f"%{_escape_like(search)}%", escape="\\"))
+        query = query.where(name_contains(ItemDefinition.name, search))
     if weapon_category:
         query = query.where(ItemDefinition.id.in_(
             select(Weapon.item_id).where(Weapon.category_code == weapon_category)

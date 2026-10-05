@@ -22,6 +22,7 @@ from app.db.models import reference as models
 from app.db.models.user import User
 from app.schemas import reference as schemas
 from app.services import reference as ref_service
+from app.services.search import name_contains
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
 
@@ -214,15 +215,10 @@ async def _replace_implies(db: AsyncSession, code: str, implies: list[str]) -> N
 
 # --- handlers ----------------------------------------------------------------------
 
-def _escape_like(term: str) -> str:
-    """Make LIKE wildcards in a search term literal (`_` and `%` match themselves)."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 async def list_entries(res: Resource, db: AsyncSession, user: User | None, search: str | None) -> list[BaseModel]:
     query = select(res.model).where(ref_service.visible_filter(res.model, user))
     if search and res.searchable:
-        query = query.where(res.model.name.ilike(f"%{_escape_like(search)}%", escape="\\"))
+        query = query.where(name_contains(res.model.name, search))
     query = query.order_by(*(getattr(res.model, column) for column in res.order_by))
     rows = (await db.execute(query)).scalars().all()
     return await _to_outs(db, res, rows, user)

@@ -143,3 +143,56 @@ class TestGrantFactories:
         assert item_type.is_homebrew and tool_type.is_homebrew
         assert tool_type.ability_code == "str"
         assert tool_type.category_code == "gaming_set"
+
+
+class TestSpellFactories:
+    async def test_seed_spell_with_materials_area_and_list(self, db_session):
+        from decimal import Decimal
+
+        from app.db.models.spells import SpellMaterial, spell_list_spells
+        from tests.integration.conftest import seed_spell
+
+        author = await seed_user(db_session)
+        spell = await seed_spell(
+            db_session, author=author,
+            materials=[dict(description="a ruby", cost_gp=Decimal("50"), consumed=True), dict(description="ash")],
+            spell_lists=["wizard"], area="10-foot-radius Sphere", area_shape_code="sphere",
+        )
+        assert (spell.source, spell.is_homebrew, spell.created_by) == ("homebrew", True, author.id)
+        assert spell.has_material is True and spell.has_verbal is True
+        assert (spell.casting_time_code, spell.range, spell.duration) == ("action", "Self", "Instantaneous")
+        rows = (await db_session.execute(
+            select(SpellMaterial).where(SpellMaterial.spell_id == spell.id).order_by(SpellMaterial.sort_order)
+        )).scalars().all()
+        assert [(m.sort_order, m.description, m.cost_gp, m.consumed, m.quantity) for m in rows] == [
+            (0, "a ruby", Decimal("50"), True, 1), (1, "ash", None, False, 1),
+        ]
+        lists = (await db_session.execute(
+            select(spell_list_spells.c.spell_list_code).where(spell_list_spells.c.spell_id == spell.id)
+        )).scalars().all()
+        assert lists == ["wizard"]
+
+    async def test_seed_spell_defaults_look_like_srd_and_are_coherent(self, db_session):
+        from tests.integration.conftest import seed_spell
+
+        spell = await seed_spell(db_session)
+        assert (spell.source, spell.is_homebrew, spell.created_by) == ("srd", False, None)
+        assert spell.has_material is False and spell.area is None and spell.area_shape_code is None
+
+    async def test_srd_spell_by_name_is_the_uuid5_row(self, db_session):
+        from tests.integration.conftest import srd_spell, srd_spell_id
+
+        spell = await srd_spell(db_session, "Fireball")
+        assert spell.id == srd_spell_id("Fireball")
+        assert (spell.level, spell.school_code) == (3, "evocation")
+
+    async def test_seed_character_spell(self, db_session):
+        from app.db.models.character import CharacterSpell
+        from tests.integration.conftest import seed_character_spell, seed_spell
+
+        user = await seed_user(db_session)
+        character = await seed_character(db_session, owner=user)
+        spell = await seed_spell(db_session, author=user)
+        link = await seed_character_spell(db_session, character, spell)
+        fetched = (await db_session.execute(select(CharacterSpell).where(CharacterSpell.id == link.id))).scalar_one()
+        assert (fetched.character_id, fetched.spell_id) == (character.id, spell.id)

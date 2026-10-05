@@ -173,6 +173,24 @@ class ChallengeRating(CodeMixin, Base):
     proficiency_bonus: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class AreaShape(CodeMixin, Base):
+    """Shape keyword of a spell's area (the icon on the sheet)."""
+
+    __tablename__ = "area_shapes"
+
+
+class SpellList(CodeMixin, Base):
+    """A spell list (bard, wizard, ...); the link class -> list comes in phase 6."""
+
+    __tablename__ = "spell_lists"
+
+
+class CastingTime(CodeMixin, Base):
+    """How long a spell takes to cast (action, bonus action, 1 minute, ...)."""
+
+    __tablename__ = "casting_times"
+
+
 class CharacterLevel(HomebrewMixin, Base):
     __tablename__ = "character_levels"
     __table_args__ = (
@@ -196,7 +214,7 @@ class PointBuyCost(HomebrewMixin, Base):
     cost: Mapped[int]  = mapped_column(Integer, nullable=False)
 
 
-# The 24 reference models exposed under /api/compendium. `campaign_homebrew_rules`
+# The 27 reference models exposed under /api/compendium. `campaign_homebrew_rules`
 # only accepts their table names in `resource_table`.
 REFERENCE_MODELS: tuple[type[Base], ...] = (
     Ability, Skill, DamageType, Condition, CreatureType, Size,
@@ -204,6 +222,7 @@ REFERENCE_MODELS: tuple[type[Base], ...] = (
     WeaponCategory, WeaponProperty, WeaponMastery, ArmorCategory, ToolCategory,
     SpellSchool, RechargeType, ActionType,
     CharacterLevel, ChallengeRating, PointBuyCost, FeatCategory, ItemType, ToolType,
+    AreaShape, SpellList, CastingTime,
 )
 REFERENCE_TABLE_NAMES: tuple[str, ...] = tuple(m.__tablename__ for m in REFERENCE_MODELS)
 

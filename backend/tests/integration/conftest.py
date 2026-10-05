@@ -20,6 +20,7 @@ from app.db.models.character import (  # noqa: E402
     CharacterClass,
     CharacterInventory,
     CharacterSkill,
+    CharacterSpell,
 )
 from app.db.models.compendium import (  # noqa: E402
     BackgroundDefinition,
@@ -30,12 +31,14 @@ from app.db.models.compendium import (  # noqa: E402
     ItemDefinition,
     ProficiencyGrant,
     SpeciesDefinition,
+    SpellDefinition,
     SubclassDefinition,
     background_proficiency_grants,
     class_proficiency_grants,
 )
 from app.db.models.items import Armor, ItemContent, Tool, Weapon, WeaponPropertyLink  # noqa: E402
 from app.db.models.reference import CampaignHomebrewRule, Skill  # noqa: E402
+from app.db.models.spells import SpellMaterial, spell_list_spells  # noqa: E402
 from app.db.models.user import User  # noqa: E402
 
 INTEGRATION_DATABASE_URL = os.environ.get(
@@ -636,6 +639,93 @@ async def seed_inventory_entry(
     )
     defaults.update(overrides)
     obj = CharacterInventory(**defaults)
+    session.add(obj)
+    await session.flush()
+    return obj
+
+
+def _srd_spell_namespace() -> uuid.UUID:
+    """`SRD_SPELL_NAMESPACE` of the squash (alembic/versions is not importable as a package)."""
+    import re
+
+    backend = os.path.dirname(os.path.dirname(_INTEGRATION_DIR))
+    path = os.path.join(backend, "alembic", "versions", "c1fcfd7fe014_initial_schema.py")
+    with open(path, encoding="utf-8") as handle:
+        match = re.search(r'SRD_SPELL_NAMESPACE = uuid\.UUID\("([0-9a-f-]+)"\)', handle.read())
+    return uuid.UUID(match.group(1))
+
+
+def srd_spell_id(name: str) -> uuid.UUID:
+    """Id of the seeded SRD spell `name` (uuid5 of the name)."""
+    return uuid.uuid5(_srd_spell_namespace(), name)
+
+
+async def srd_spell(session: AsyncSession, name: str) -> SpellDefinition:
+    """The seeded SRD spell called `name` (seed names are unique)."""
+    result = await session.execute(select(SpellDefinition).where(SpellDefinition.id == srd_spell_id(name)))
+    return result.scalar_one()
+
+
+async def seed_spell(
+    session: AsyncSession,
+    author: User | None = None,
+    materials: list[dict] = (),
+    spell_lists: list[str] = (),
+    **overrides,
+) -> SpellDefinition:
+    """A coherent spell (level 1 evocation, V, action, Self, Instantaneous by default).
+    With `author` it is homebrew of that user; otherwise it looks like an SRD row.
+    `materials` are dicts of `spell_materials` columns (sort_order = position) and set
+    `has_material`; `spell_lists` are list codes linked to the spell."""
+    defaults = dict(
+        id=uuid.uuid4(),
+        name=f"Spell-{uuid.uuid4().hex[:10]}",
+        level=1,
+        school_code="evocation",
+        has_verbal=True,
+        has_somatic=False,
+        has_material=bool(materials),
+        casting_time_code="action",
+        ritual=False,
+        concentration=False,
+        range="Self",
+        duration="Instantaneous",
+        area=None,
+        area_shape_code=None,
+        description="A test spell.",
+        higher_levels=None,
+        cantrip_upgrade=None,
+        source="srd",
+        is_homebrew=False,
+        created_by=None,
+    )
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
+    defaults.update(overrides)
+    spell = SpellDefinition(**defaults)
+    session.add(spell)
+    await session.flush()
+    for sort_order, material in enumerate(materials):
+        session.add(SpellMaterial(spell_id=spell.id, sort_order=sort_order, **material))
+    for code in spell_lists:
+        await session.execute(spell_list_spells.insert().values(spell_list_code=code, spell_id=spell.id))
+    await session.flush()
+    return spell
+
+
+async def seed_character_spell(
+    session: AsyncSession, character: Character, spell: SpellDefinition, **overrides
+) -> CharacterSpell:
+    defaults = dict(
+        id=uuid.uuid4(),
+        character_id=character.id,
+        spell_id=spell.id,
+        is_prepared=False,
+        is_always_prepared=False,
+        source="class",
+    )
+    defaults.update(overrides)
+    obj = CharacterSpell(**defaults)
     session.add(obj)
     await session.flush()
     return obj

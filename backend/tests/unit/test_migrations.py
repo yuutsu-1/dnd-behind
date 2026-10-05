@@ -1,6 +1,8 @@
 """The migration history is a single squashed revision (phases 1 and 2 rewrite it)."""
 import os
 
+import pytest
+
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
@@ -73,3 +75,42 @@ def test_downgrade_drops_every_table_after_the_tables_that_reference_it():
             target = fk.column.table.name
             if target != table.name:
                 assert position[table.name] < position[target], f"{table.name} must be dropped before {target}"
+
+
+def _squash_source() -> str:
+    path = os.path.join(BACKEND_DIR, "alembic", "versions", "c1fcfd7fe014_initial_schema.py")
+    return open(path, encoding="utf-8").read()
+
+
+# Phase 3: old spell columns/tables and the ones dropped by the gate #2 review.
+PHASE3_REMOVED = (
+    "spell_class_lists", "material_component", "time_units", "range_types", "duration_types", "spell_areas",
+    "casting_trigger", "'components'",
+)
+
+
+@pytest.mark.parametrize("legacy", PHASE3_REMOVED)
+def test_squash_does_not_reference_phase3_removed_names(legacy):
+    assert legacy not in _squash_source()
+
+
+@pytest.mark.parametrize("table", ["area_shapes", "spell_lists", "casting_times", "spell_materials", "spell_list_spells"])
+def test_squash_creates_and_drops_phase3_tables(table):
+    source = _squash_source()
+    assert f"op.create_table('{table}'" in source
+    assert f"op.drop_table('{table}')" in source
+
+
+def test_squash_share_check_lists_the_27_reference_tables():
+    from app.db.models.reference import REFERENCE_TABLE_NAMES
+
+    source = _squash_source()
+    expected = "resource_table IN (" + ", ".join(f"'{name}'" for name in REFERENCE_TABLE_NAMES) + ")"
+    assert expected in source
+
+
+def test_squash_spell_name_is_not_unique():
+    source = _squash_source()
+    spells = source[source.index("op.create_table('spell_definitions'"):]
+    spells = spells[:spells.index("op.create_table(", 10)]
+    assert "UniqueConstraint('name')" not in spells

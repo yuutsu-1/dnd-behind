@@ -14,10 +14,8 @@ from app.db.models.compendium import (
     FeatDefinition,
     FeatureGrant,
     ItemDefinition,
-    SpellDefinition,
     SpeciesDefinition,
     SubclassDefinition,
-    spell_class_lists,
 )
 from app.db.models.reference import Ability, Size, Skill
 from app.db.models.user import User
@@ -26,14 +24,15 @@ from app.schemas.compendium import (
     ClassCreate, ClassOut,
     FeatCreate, FeatOut,
     FeatureGrantCreate, FeatureGrantOut,
-    SpellCreate, SpellOut,
     SpeciesCreate, SpeciesOut,
     SubclassCreate, SubclassOut,
 )
 from app.schemas.items import ItemCreate, ItemOut, ItemUpdate
+from app.schemas.spells import SpellCreate, SpellOut, SpellUpdate
 from app.schemas.proficiency_grants import ProficiencyGrantOut
 from app.services import items as item_service
 from app.services import proficiency_grants as grant_service
+from app.services import spells as spell_service
 from app.services.reference import resolve_codes
 
 router = APIRouter(prefix="/compendium", tags=["compendium"])
@@ -286,69 +285,47 @@ async def create_feat(data: FeatCreate, current_user: CurrentUser, db: DB):
     await db.refresh(obj)
     return obj
 
+# Spells are global (every user sees every spell); `user` is optional: no token ->
+# anonymous, invalid token -> 401. Filters take codes; an unknown code matches nothing.
 @router.get("/spells", response_model=list[SpellOut])
 async def list_spells(
     db: DB,
+    user: OptionalUser,
     level: int | None = Query(default=None, ge=0, le=9),
-    class_name: str | None = Query(default=None),
+    school: str | None = Query(default=None),
+    spell_list: str | None = Query(default=None),
+    concentration: bool | None = Query(default=None),
+    ritual: bool | None = Query(default=None),
     search: str | None = Query(default=None),
 ):
-    q = select(SpellDefinition)
-    if level is not None:
-        q = q.where(SpellDefinition.level == level)
-    if search:
-        q = q.where(SpellDefinition.name.ilike(f"%{search}%"))
-    if class_name:
-        # Subquery avoids conflicting with the selectin eager-load on class_list
-        subq = (
-            select(spell_class_lists.c.spell_id)
-            .join(ClassDefinition, ClassDefinition.id == spell_class_lists.c.class_id)
-            .where(ClassDefinition.name.ilike(class_name))
-        )
-        q = q.where(SpellDefinition.id.in_(subq))
-    result = await db.execute(q)
-    return list(result.scalars().all())
+    return await spell_service.list_spells(
+        db, level=level, school=school, spell_list=spell_list, concentration=concentration, ritual=ritual,
+        search=search,
+    )
 
 
 @router.get("/spells/{spell_id}", response_model=SpellOut)
-async def get_spell(spell_id: uuid.UUID, db: DB):
-    result = await db.execute(select(SpellDefinition).where(SpellDefinition.id == spell_id))
-    obj = result.scalar_one_or_none()
-    if not obj:
+async def get_spell(spell_id: uuid.UUID, db: DB, user: OptionalUser):
+    obj = await spell_service.get_spell(db, spell_id)
+    if obj is None:
         raise HTTPException(status_code=404, detail="Spell not found")
     return obj
 
-
 @router.post("/spells", response_model=SpellOut, status_code=201)
 async def create_spell(data: SpellCreate, current_user: CurrentUser, db: DB):
-    obj = SpellDefinition(
-        name=data.name,
-        level=data.level,
-        school=data.school,
-        casting_time=data.casting_time,
-        range=data.range,
-        components=data.components,
-        material_component=data.material_component,
-        duration=data.duration,
-        concentration=data.concentration,
-        ritual=data.ritual,
-        description=data.description,
-        higher_levels=data.higher_levels,
-        is_homebrew=True,
-        created_by=current_user.id,
-    )
-    db.add(obj)
-    await db.flush()
+    return await spell_service.create_spell(db, data, current_user)
 
-    if data.class_ids:
-        result = await db.execute(
-            select(ClassDefinition).where(ClassDefinition.id.in_(data.class_ids))
-        )
-        obj.class_list = list(result.scalars())
+@router.patch("/spells/{spell_id}", response_model=SpellOut)
+async def update_spell(spell_id: uuid.UUID, data: SpellUpdate, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew (SRD/other author -> 403, missing -> 404)."""
+    return await spell_service.update_spell(db, spell_id, data, current_user)
 
-    await db.commit()
-    await db.refresh(obj)
-    return obj
+
+@router.delete("/spells/{spell_id}", status_code=204)
+async def delete_spell(spell_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; 409 while a character knows the spell."""
+    await spell_service.delete_spell(db, spell_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Items are global (every user sees every item); `user` is optional: no token ->
 # anonymous, invalid token -> 401. Filters take codes; an unknown code matches nothing.

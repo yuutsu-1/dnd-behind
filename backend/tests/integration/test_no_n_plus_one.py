@@ -125,3 +125,34 @@ class TestListClassesNoNPlusOne:
         assert count_n2 == count_n6, (
             f"query count grew with N: {count_n2} (N=2) vs {count_n6} (N=6) -- possible N+1 in `list_classes`"
         )
+
+
+class TestListSpellsNoNPlusOne:
+    """Spells load names (joined), materials and lists in a fixed number of queries."""
+
+    async def _query_count_for_n(self, db_session, db_engine, n: int) -> int:
+        from app.services.spells import list_spells
+        from tests.integration.conftest import seed_spell
+
+        author = await seed_user(db_session)
+        marker = uuid.uuid4().hex[:8]
+        for i in range(n):
+            await seed_spell(
+                db_session, author=author, name=f"NPlusOne-{marker}-{i}",
+                materials=[dict(description="ash"), dict(description="a gem")],
+                spell_lists=["wizard", "bard"], area="5-foot Cube", area_shape_code="cube",
+            )
+        db_session.expunge_all()
+
+        with count_queries(db_engine) as counter:
+            spells = await list_spells(db_session, search=f"NPlusOne-{marker}")
+            assert all(len(s.materials) == 2 and len(s.spell_lists) == 2 and s.area_shape_name for s in spells)
+        assert len(spells) == n
+        return counter.count
+
+    async def test_query_count_does_not_grow_with_n(self, db_session, db_engine):
+        count_n2 = await self._query_count_for_n(db_session, db_engine, 2)
+        count_n6 = await self._query_count_for_n(db_session, db_engine, 6)
+        assert count_n2 == count_n6, (
+            f"query count grew with N: {count_n2} (N=2) vs {count_n6} (N=6) -- possible N+1 in `list_spells`"
+        )

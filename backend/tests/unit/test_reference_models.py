@@ -1,4 +1,4 @@
-"""Metadata-level checks for the SRD reference tables (phases 1 and 2 of the model redesign)."""
+"""Metadata-level checks for the SRD reference tables (phases 1, 2 and 3 of the model redesign)."""
 import pytest
 from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,6 +12,7 @@ CODE_TABLES = [
     "weapon_categories", "weapon_properties", "weapon_masteries", "armor_categories", "tool_categories",
     "spell_schools", "recharge_types", "action_types",
     "challenge_ratings", "feat_categories", "item_types", "tool_types",
+    "area_shapes", "spell_lists", "casting_times",
 ]
 KEYED_TABLES = {"character_levels": "level", "point_buy_costs": "score"}
 REFERENCE_TABLES = CODE_TABLES + list(KEYED_TABLES)
@@ -41,12 +42,12 @@ def _unique_column_sets(table_name) -> list[set[str]]:
     return sets
 
 
-def test_there_are_24_reference_tables():
+def test_there_are_27_reference_tables():
     from app.db.models.reference import REFERENCE_TABLE_NAMES
 
-    assert len(REFERENCE_TABLES) == 24
+    assert len(REFERENCE_TABLES) == 27
     assert set(REFERENCE_TABLE_NAMES) == set(REFERENCE_TABLES)
-    assert len(REFERENCE_TABLE_NAMES) == 24
+    assert len(REFERENCE_TABLE_NAMES) == 27
     for name in REFERENCE_TABLES:
         _table(name)
 
@@ -60,10 +61,27 @@ def test_tool_proficiency_options_is_gone():
     assert not hasattr(models, "ToolProficiencyOption")
 
 
-def test_item_types_has_no_extra_columns():
-    assert set(_table("item_types").c.keys()) == {
+@pytest.mark.parametrize("name", ["item_types", "area_shapes", "spell_lists", "casting_times"])
+def test_code_tables_without_extra_columns(name):
+    assert set(_table(name).c.keys()) == {
         "code", "name", "description", "source", "is_homebrew", "created_by",
     }
+
+
+@pytest.mark.parametrize("name", ["time_units", "range_types", "duration_types", "spell_areas"])
+def test_tables_dropped_by_the_gate2_review_do_not_exist(name):
+    import app.db.models.reference as reference
+
+    assert name not in Base.metadata.tables
+    assert name not in reference.REFERENCE_TABLE_NAMES
+
+
+def test_phase3_models_are_exported():
+    import app.db.models as models
+    from app.db.models.reference import REFERENCE_MODELS, AreaShape, CastingTime, SpellList
+
+    assert {AreaShape, SpellList, CastingTime} <= set(REFERENCE_MODELS)
+    assert models.AreaShape is AreaShape and models.SpellList is SpellList and models.CastingTime is CastingTime
 
 
 def test_tool_types_foreign_keys():
@@ -188,3 +206,5 @@ def test_campaign_homebrew_rules_resource_table_is_restricted_to_reference_table
     assert "'condition_implications'" not in checks
     assert "'tool_proficiency_options'" not in checks
     assert "'item_types'" in checks and "'tool_types'" in checks
+    for name in ("area_shapes", "spell_lists", "casting_times"):
+        assert f"'{name}'" in checks

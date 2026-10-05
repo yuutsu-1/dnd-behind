@@ -53,12 +53,6 @@ class SpeciesCreate(BaseModel):
     base_speed: int = 30
 
 
-def _pluck(v: list) -> list: #pra casos das lookup tables, deixa a vida mais fácil
-    if v and hasattr(v[0], "name"):
-        return [item.name for item in v]
-    return v
-
-
 def _pluck_codes(v: list) -> list:
     """Reference rows (ORM) -> their codes; plain lists of codes pass through."""
     if v and hasattr(v[0], "code"):
@@ -315,46 +309,3 @@ class FeatCreate(BaseModel):
     level_prerequisite: int = 0
     prerequisite_description: str | None = None
     repeatable: bool = False
-
-class SpellOut(BaseModel):
-    model_config = {"from_attributes": True}
-
-    id: uuid.UUID
-    name: str
-    level: int
-    school: str
-    casting_time: str
-    range: str
-    components: list
-    material_component: str | None
-    duration: str
-    concentration: bool
-    ritual: bool
-    description: str
-    higher_levels: str | None
-    class_list: list[str]
-    source: str
-    is_homebrew: bool
-
-    @field_validator("class_list", mode="before")
-    @classmethod
-    def _class_names(cls, v: list) -> list:
-        return _pluck(v)
-
-
-class SpellCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    level: int = Field(ge=0, le=9)
-    school: str
-    casting_time: str
-    range: str
-    components: list[str]
-    material_component: str | None = None
-    duration: str
-    concentration: bool = False
-    ritual: bool = False
-    description: str
-    higher_levels: str | None = None
-    # IDs of existing ClassDefinition rows to link
-    class_ids: list[uuid.UUID] = Field(default_factory=list)
-

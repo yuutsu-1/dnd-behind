@@ -37,6 +37,9 @@ SIMPLE_RESOURCES = {
     "action-types": 3,
     "feat-categories": 4,
     "item-types": 7,
+    "area-shapes": 8,
+    "spell-lists": 8,
+    "casting-times": 9,
 }
 
 

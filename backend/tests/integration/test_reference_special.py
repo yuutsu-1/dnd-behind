@@ -1,5 +1,5 @@
 """Reference resources with special rules: sizes, challenge-ratings, character-levels,
-point-buy-costs, skills, conditions and tool-types; plus the public GET of all 24 resources."""
+point-buy-costs, skills, conditions and tool-types; plus the public GET of all 27 resources."""
 import pytest
 from sqlalchemy import func, select
 
@@ -39,7 +39,7 @@ async def people(db_session):
     return dict(a=a, p=p, b=b, c=c)
 
 
-class TestPublicGetAll24:
+class TestPublicGetAll27:
     EXPECTED_KEYS = {
         "sizes": ["tiny", "small", "medium", "large", "huge", "gargantuan"],
         "character-levels": list(range(1, 21)),
@@ -47,11 +47,11 @@ class TestPublicGetAll24:
         "challenge-ratings": CR_ORDER,
     }
 
-    def test_there_are_24_resources(self):
+    def test_there_are_27_resources(self):
         from app.api.reference import RESOURCES
 
         # + skills, conditions, tool-types
-        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 3 == 24 == len(RESOURCES)
+        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 3 == 27 == len(RESOURCES)
         assert "tool-proficiencies" not in {r.slug for r in RESOURCES}
 
     @pytest.mark.parametrize("slug,key", [
@@ -437,3 +437,40 @@ class TestConditions:
         assert as_player["implies"] == ["prone"]
         listed = (await api_client.get(f"{API}/conditions", headers=auth_headers(people["p"]))).json()
         assert next(r for r in listed if r["code"] == "woozy")["implies"] == ["prone"]
+
+
+PHASE3_SLUGS = ["area-shapes", "spell-lists", "casting-times"]
+
+
+class TestPhase3References:
+    @pytest.mark.parametrize("slug", PHASE3_SLUGS)
+    async def test_invalid_token_is_401(self, api_client, slug):
+        response = await api_client.get(f"{API}/{slug}", headers={"Authorization": "Bearer not-a-token"})
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("slug", PHASE3_SLUGS)
+    async def test_post_without_token_is_401(self, api_client, slug):
+        response = await api_client.post(f"{API}/{slug}", json={"code": "hb_x", "name": "X"})
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize("slug,srd_code", [
+        ("area-shapes", "sphere"), ("spell-lists", "wizard"), ("casting-times", "action"),
+    ])
+    async def test_patch_and_delete_of_srd_is_403(self, api_client, people, slug, srd_code):
+        headers = auth_headers(people["a"])
+        assert (await api_client.patch(f"{API}/{slug}/{srd_code}", json={"name": "X"}, headers=headers)).status_code == 403
+        assert (await api_client.delete(f"{API}/{slug}/{srd_code}", headers=headers)).status_code == 403
+
+    @pytest.mark.parametrize("slug", PHASE3_SLUGS)
+    async def test_homebrew_shared_with_campaign_is_visible_to_member_only(self, api_client, people, slug):
+        created = await api_client.post(
+            f"{API}/{slug}", json={"code": "hb_shared", "name": "Shared", "campaign_ids": [str(people["c"].id)]},
+            headers=auth_headers(people["a"]),
+        )
+        assert created.status_code == 201, created.text
+        assert (await api_client.get(f"{API}/{slug}/hb_shared", headers=auth_headers(people["p"]))).status_code == 200
+        assert (await api_client.get(f"{API}/{slug}/hb_shared", headers=auth_headers(people["b"]))).status_code == 404
+        other = await api_client.patch(
+            f"{API}/{slug}/hb_shared", json={"name": "Mine"}, headers=auth_headers(people["p"])
+        )
+        assert other.status_code == 403

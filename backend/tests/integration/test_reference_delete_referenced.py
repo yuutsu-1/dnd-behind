@@ -289,3 +289,57 @@ async def test_categories_used_by_a_grant_are_409(api_client, db_session, author
     await db_session.commit()
     code = entry.code
     assert (await _delete(api_client, author, slug, code)).status_code == 409
+
+
+# --- phase 3: references used by spells --------------------------------------------
+
+@pytest.mark.parametrize("slug,model,spell_field", [
+    ("casting-times", "CastingTime", "casting_time_code"),
+    ("area-shapes", "AreaShape", "area_shape_code"),
+    ("spell-schools", "SpellSchool", "school_code"),
+])
+async def test_reference_used_by_a_spell_is_409(api_client, db_session, author, slug, model, spell_field):
+    import app.db.models.reference as reference
+    from tests.integration.conftest import seed_spell
+
+    model = getattr(reference, model)
+    await seed_reference(db_session, model, author=author["user"], code="hb_used", name="Used",
+                         campaigns=[author["campaign"]])
+    overrides = {spell_field: "hb_used"}
+    if spell_field == "area_shape_code":
+        overrides["area"] = "Some area"
+    await seed_spell(db_session, author=author["user"], **overrides)
+    await db_session.commit()
+
+    response = await api_client.delete(f"{API}/{slug}/hb_used", headers=author["headers"])
+    assert response.status_code == 409
+    assert await _exists(db_session, model, "hb_used")
+    assert await _shares(db_session, model.__tablename__, "hb_used") == 1
+
+
+async def test_spell_list_used_by_a_link_is_409(api_client, db_session, author):
+    from app.db.models.reference import SpellList
+    from tests.integration.conftest import seed_spell
+
+    await seed_reference(db_session, SpellList, author=author["user"], code="hb_list", name="Homebrew List",
+                         campaigns=[author["campaign"]])
+    await seed_spell(db_session, author=author["user"], spell_lists=["hb_list"])
+    await db_session.commit()
+
+    response = await api_client.delete(f"{API}/spell-lists/hb_list", headers=author["headers"])
+    assert response.status_code == 409
+    assert await _exists(db_session, SpellList, "hb_list")
+    assert await _shares(db_session, "spell_lists", "hb_list") == 1
+
+
+async def test_spell_list_without_links_can_be_deleted(api_client, db_session, author):
+    from app.db.models.reference import SpellList
+
+    await seed_reference(db_session, SpellList, author=author["user"], code="hb_free", name="Free List",
+                         campaigns=[author["campaign"]])
+    await db_session.commit()
+
+    response = await api_client.delete(f"{API}/spell-lists/hb_free", headers=author["headers"])
+    assert response.status_code == 204
+    assert not await _exists(db_session, SpellList, "hb_free")
+    assert await _shares(db_session, "spell_lists", "hb_free") == 0

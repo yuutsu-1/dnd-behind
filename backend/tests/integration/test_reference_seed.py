@@ -30,6 +30,9 @@ EXPECTED_COUNTS = {
     "point_buy_costs": 8,
     "item_types": 7,
     "tool_types": 37,
+    "area_shapes": 8,
+    "spell_lists": 8,
+    "casting_times": 9,
 }
 
 SEEDED_REFERENCE_TABLES = [t for t in EXPECTED_COUNTS if t != "condition_implications"]
@@ -211,3 +214,29 @@ async def test_legacy_tables_do_not_exist(db_session):
 
 async def test_single_alembic_revision_applied(db_session):
     assert await _scalar(db_session, "SELECT version_num FROM alembic_version") == "c1fcfd7fe014"
+
+
+async def _names(db_session, table: str) -> dict[str, str]:
+    return dict((await db_session.execute(text(f"SELECT code, name FROM {table} WHERE source = 'srd'"))).all())
+
+
+async def test_area_shapes_seed(db_session):
+    assert await _names(db_session, "area_shapes") == {
+        "cone": "Cone", "cube": "Cube", "cylinder": "Cylinder", "emanation": "Emanation", "line": "Line",
+        "sphere": "Sphere", "radius": "Radius", "square": "Square",
+    }
+
+
+async def test_spell_lists_seed(db_session):
+    assert await _names(db_session, "spell_lists") == {
+        "bard": "Bard", "cleric": "Cleric", "druid": "Druid", "paladin": "Paladin", "ranger": "Ranger",
+        "sorcerer": "Sorcerer", "warlock": "Warlock", "wizard": "Wizard",
+    }
+
+
+async def test_casting_times_seed(db_session):
+    assert await _names(db_session, "casting_times") == {
+        "action": "Action", "bonus_action": "Bonus Action", "reaction": "Reaction", "1_minute": "1 Minute",
+        "10_minutes": "10 Minutes", "1_hour": "1 Hour", "8_hours": "8 Hours", "12_hours": "12 Hours",
+        "24_hours": "24 Hours",
+    }

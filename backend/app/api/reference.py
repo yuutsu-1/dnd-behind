@@ -92,6 +92,9 @@ RESOURCES: list[Resource] = [
     _simple("action-types", models.ActionType),
     _simple("feat-categories", models.FeatCategory),
     _simple("item-types", models.ItemType),
+    _simple("area-shapes", models.AreaShape),
+    _simple("spell-lists", models.SpellList),
+    _simple("casting-times", models.CastingTime),
     Resource(
         "tool-types", models.ToolType, schemas.ToolTypeCreate, schemas.ToolTypeUpdate, schemas.ToolTypeOut,
         references=(

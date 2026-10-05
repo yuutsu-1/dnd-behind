@@ -13,14 +13,19 @@ from app.db.base import Base
 from app.db.models.reference import (
     CODE_LENGTH,
     Ability,
+    AreaShape,
     ArmorCategory,
+    CastingTime,
     Language,
     Skill,
+    SpellList,
+    SpellSchool,
     ToolCategory,
     ToolType,
     WeaponCategory,
     WeaponProperty,
 )
+from app.db.models.spells import SpellMaterial, spell_list_spells
 
 
 def _code_fk(target: str) -> ForeignKey:
@@ -32,13 +37,6 @@ class_primary_abilities = Table(
     Base.metadata,
     Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
     Column("ability_code", String(CODE_LENGTH), _code_fk("ability_scores.code"), primary_key=True),
-)
-
-spell_class_lists = Table(
-    "spell_class_lists",
-    Base.metadata,
-    Column("spell_id", UUID(as_uuid=True), ForeignKey("spell_definitions.id", ondelete="CASCADE"), primary_key=True),
-    Column("class_id", UUID(as_uuid=True), ForeignKey("class_definitions.id", ondelete="CASCADE"), primary_key=True),
 )
 
 class_skills = Table(
@@ -315,29 +313,66 @@ class FeatDefinition(Base):
 
 
 class SpellDefinition(Base):
+    """A spell: one fact per column. `range`, `duration` and `area` are display text;
+    `area_shape_code` (the icon of the area) goes together with `area`. Damage, saves
+    and attacks stay in the text (`description`, `higher_levels`, `cantrip_upgrade`)."""
+
     __tablename__ = "spell_definitions"
+    __table_args__ = (
+        CheckConstraint("level BETWEEN 0 AND 9", name="ck_spell_definitions_level"),
+        CheckConstraint("has_verbal OR has_somatic OR has_material", name="ck_spell_definitions_has_component"),
+        CheckConstraint("(area IS NULL) = (area_shape_code IS NULL)", name="ck_spell_definitions_area_pair"),
+        CheckConstraint("cantrip_upgrade IS NULL OR level = 0", name="ck_spell_definitions_cantrip_upgrade"),
+        CheckConstraint("higher_levels IS NULL OR level >= 1", name="ck_spell_definitions_higher_levels"),
+    )
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str]               = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str]               = mapped_column(String(100), nullable=False)
     level: Mapped[int]              = mapped_column(Integer, nullable=False)  # 0 = cantrip
-    school: Mapped[str]             = mapped_column(String(20), nullable=False)
-    casting_time: Mapped[str]       = mapped_column(String(50), nullable=False)
-    range: Mapped[str]              = mapped_column(String(50), nullable=False)
-    components: Mapped[list]        = mapped_column(JSONB, nullable=False, default=list)
-    material_component: Mapped[str | None] = mapped_column(Text)
-    duration: Mapped[str]           = mapped_column(String(50), nullable=False)
-    concentration: Mapped[bool]     = mapped_column(Boolean, default=False)
-    ritual: Mapped[bool]            = mapped_column(Boolean, default=False)
+    school_code: Mapped[str]        = mapped_column(String(CODE_LENGTH), _code_fk("spell_schools.code"), nullable=False)
+    has_verbal: Mapped[bool]        = mapped_column(Boolean, nullable=False, default=False)
+    has_somatic: Mapped[bool]       = mapped_column(Boolean, nullable=False, default=False)
+    has_material: Mapped[bool]      = mapped_column(Boolean, nullable=False, default=False)
+    casting_time_code: Mapped[str]  = mapped_column(
+        String(CODE_LENGTH), _code_fk("casting_times.code"), nullable=False
+    )
+    ritual: Mapped[bool]            = mapped_column(Boolean, nullable=False, default=False)
+    concentration: Mapped[bool]     = mapped_column(Boolean, nullable=False, default=False)
+    range: Mapped[str]              = mapped_column(Text, nullable=False)
+    duration: Mapped[str]           = mapped_column(Text, nullable=False)
+    area: Mapped[str | None]        = mapped_column(Text)
+    area_shape_code: Mapped[str | None] = mapped_column(String(CODE_LENGTH), _code_fk("area_shapes.code"))
     description: Mapped[str]        = mapped_column(Text, nullable=False)
-    higher_levels: Mapped[str | None] = mapped_column(Text)
+    higher_levels: Mapped[str | None]   = mapped_column(Text)
+    cantrip_upgrade: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    class_list: Mapped[list["ClassDefinition"]] = relationship(
-        secondary=spell_class_lists, lazy="selectin"
+    # Names come joined with the spell; materials and lists are loaded explicitly
+    # (app/services/spells.py), never implicitly.
+    school: Mapped[SpellSchool]             = relationship(lazy="joined")
+    casting_time: Mapped[CastingTime]       = relationship(lazy="joined")
+    area_shape: Mapped[AreaShape | None]    = relationship(lazy="joined")
+    materials: Mapped[list[SpellMaterial]]  = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, order_by=SpellMaterial.sort_order,
     )
+    spell_lists: Mapped[list[SpellList]]    = relationship(
+        secondary=spell_list_spells, passive_deletes=True, order_by=SpellList.code,
+    )
+
+    @property
+    def school_name(self) -> str | None:
+        return self.school.name if self.school else None
+
+    @property
+    def casting_time_name(self) -> str | None:
+        return self.casting_time.name if self.casting_time else None
+
+    @property
+    def area_shape_name(self) -> str | None:
+        return self.area_shape.name if self.area_shape else None
 
 
 def _sub_row():

@@ -13,6 +13,7 @@ CODE_TABLES = [
     "spell_schools", "recharge_types", "action_types",
     "challenge_ratings", "feat_categories", "item_types", "tool_types",
     "area_shapes", "spell_lists", "casting_times",
+    "effect_operations", "effect_targets", "value_bases", "choice_pool_types", "choice_swap_rules", "feature_kinds",
 ]
 KEYED_TABLES = {"character_levels": "level", "point_buy_costs": "score"}
 REFERENCE_TABLES = CODE_TABLES + list(KEYED_TABLES)
@@ -42,12 +43,12 @@ def _unique_column_sets(table_name) -> list[set[str]]:
     return sets
 
 
-def test_there_are_27_reference_tables():
+def test_there_are_33_reference_tables():
     from app.db.models.reference import REFERENCE_TABLE_NAMES
 
-    assert len(REFERENCE_TABLES) == 27
+    assert len(REFERENCE_TABLES) == 33
     assert set(REFERENCE_TABLE_NAMES) == set(REFERENCE_TABLES)
-    assert len(REFERENCE_TABLE_NAMES) == 27
+    assert len(REFERENCE_TABLE_NAMES) == 33
     for name in REFERENCE_TABLES:
         _table(name)
 
@@ -61,7 +62,12 @@ def test_tool_proficiency_options_is_gone():
     assert not hasattr(models, "ToolProficiencyOption")
 
 
-@pytest.mark.parametrize("name", ["item_types", "area_shapes", "spell_lists", "casting_times"])
+PHASE4_TABLES = [
+    "effect_operations", "effect_targets", "value_bases", "choice_pool_types", "choice_swap_rules", "feature_kinds",
+]
+
+
+@pytest.mark.parametrize("name", ["item_types", "area_shapes", "spell_lists", "casting_times", *PHASE4_TABLES])
 def test_code_tables_without_extra_columns(name):
     assert set(_table(name).c.keys()) == {
         "code", "name", "description", "source", "is_homebrew", "created_by",
@@ -82,6 +88,18 @@ def test_phase3_models_are_exported():
 
     assert {AreaShape, SpellList, CastingTime} <= set(REFERENCE_MODELS)
     assert models.AreaShape is AreaShape and models.SpellList is SpellList and models.CastingTime is CastingTime
+
+
+def test_phase4_models_are_exported():
+    import app.db.models as models
+    from app.db.models import reference
+
+    names = ["EffectOperation", "EffectTarget", "ValueBasis", "ChoicePoolType", "ChoiceSwapRule", "FeatureKind"]
+    for name, table in zip(names, PHASE4_TABLES):
+        model = getattr(reference, name)
+        assert model.__tablename__ == table
+        assert model in reference.REFERENCE_MODELS
+        assert getattr(models, name) is model
 
 
 def test_tool_types_foreign_keys():
@@ -206,5 +224,5 @@ def test_campaign_homebrew_rules_resource_table_is_restricted_to_reference_table
     assert "'condition_implications'" not in checks
     assert "'tool_proficiency_options'" not in checks
     assert "'item_types'" in checks and "'tool_types'" in checks
-    for name in ("area_shapes", "spell_lists", "casting_times"):
+    for name in ("area_shapes", "spell_lists", "casting_times", *PHASE4_TABLES):
         assert f"'{name}'" in checks

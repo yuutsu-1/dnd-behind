@@ -40,6 +40,12 @@ SIMPLE_RESOURCES = {
     "area-shapes": 8,
     "spell-lists": 8,
     "casting-times": 9,
+    "effect-operations": 12,
+    "effect-targets": 12,
+    "value-bases": 4,
+    "choice-pool-types": 9,
+    "choice-swap-rules": 3,
+    "feature-kinds": 2,
 }
 
 

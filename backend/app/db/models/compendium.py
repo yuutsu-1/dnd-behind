@@ -16,6 +16,7 @@ from app.db.models.reference import (
     AreaShape,
     ArmorCategory,
     CastingTime,
+    FeatCategory,
     Language,
     Skill,
     SpellList,
@@ -25,11 +26,22 @@ from app.db.models.reference import (
     WeaponCategory,
     WeaponProperty,
 )
+from app.db.models.features import FeatPrerequisite, FeatureDefinition
 from app.db.models.spells import SpellMaterial, spell_list_spells
 
 
 def _code_fk(target: str) -> ForeignKey:
     return ForeignKey(target, ondelete="RESTRICT")
+
+
+def _features():
+    """Features of an owner (the FK cascades in the database). Loaded explicitly by the
+    services (app/services/features.py), in level, sort order, name, id order."""
+    return relationship(
+        FeatureDefinition, viewonly=True,
+        order_by=(FeatureDefinition.level.asc().nulls_first(), FeatureDefinition.sort_order,
+                  FeatureDefinition.name, FeatureDefinition.id),
+    )
 
 
 class_primary_abilities = Table(
@@ -164,26 +176,6 @@ background_proficiency_grants = Table(
 )
 
 
-class FeatureGrant(Base):
-    """
-    Unidade atômica universal. Toda fonte (nível de classe, espécie, antecedente,
-    feito, item mágico) emite N dessas. O motor lê effect_type + effect_data e 
-    aplica o resultado a um personagem.
-    """
-    __tablename__ = "feature_grants"
-
-    id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    source_type: Mapped[str]        = mapped_column(String(30), nullable=False, index=True)
-    source_id: Mapped[uuid.UUID]    = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
-    name: Mapped[str]               = mapped_column(String(100), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    effect_type: Mapped[str]        = mapped_column(String(30), nullable=False)
-    effect_data: Mapped[dict]       = mapped_column(JSONB, nullable=False)
-    level_requirement: Mapped[int]  = mapped_column(Integer, nullable=False, default=1)
-    is_optional: Mapped[bool]       = mapped_column(Boolean, default=False)
-    sort_order: Mapped[int]         = mapped_column(Integer, default=0)
-
-
 class SpeciesDefinition(Base):
     __tablename__ = "species_definitions"
 
@@ -221,15 +213,16 @@ class ClassDefinition(Base):
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     primary_ability: Mapped[list[Ability]] = relationship(
-        secondary=class_primary_abilities, lazy="selectin"
+        secondary=class_primary_abilities, lazy="selectin", order_by=Ability.code
     )
     proficiency_grants: Mapped[list[ProficiencyGrant]] = relationship(
         secondary=class_proficiency_grants, lazy="selectin"
     )
     skills: Mapped[list[Skill]] = relationship(
-        secondary=class_skills, lazy="selectin"
+        secondary=class_skills, lazy="selectin", order_by=Skill.code
     )
     subclasses: Mapped[list["SubclassDefinition"]] = relationship(back_populates="class_def")
+    features: Mapped[list["FeatureDefinition"]] = _features()
     initial_equipment: Mapped[list["ClassInitialEquipment"]] = relationship(
         back_populates="class_def", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -255,6 +248,7 @@ class SubclassDefinition(Base):
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     class_def: Mapped["ClassDefinition"] = relationship(back_populates="subclasses")
+    features: Mapped[list["FeatureDefinition"]] = _features()
 
     @property
     def class_name(self) -> str | None:
@@ -296,20 +290,32 @@ class BackgroundDefinition(Base):
 
 
 class FeatDefinition(Base):
+    """A feat. `category_code` is a `feat_categories` code; the prerequisites and the
+    features are child rows loaded explicitly (app/services/feats.py)."""
+
     __tablename__ = "feat_definitions"
 
     id: Mapped[uuid.UUID]           = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str]               = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str]               = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    # "origin" | "general" | "fighting_style" | "epic_boon"
-    category: Mapped[str]           = mapped_column(String(20), nullable=False)
-    level_prerequisite: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    prerequisite_description: Mapped[str | None] = mapped_column(Text)
+    category_code: Mapped[str]      = mapped_column(
+        String(CODE_LENGTH), _code_fk("feat_categories.code"), nullable=False
+    )
     repeatable: Mapped[bool]        = mapped_column(Boolean, default=False)
     source: Mapped[str]             = mapped_column(String(20), nullable=False, default="srd")
     is_homebrew: Mapped[bool]       = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    category: Mapped[FeatCategory] = relationship(lazy="joined")
+    prerequisites: Mapped[list["FeatPrerequisite"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+    features: Mapped[list["FeatureDefinition"]] = _features()
+
+    @property
+    def category_name(self) -> str | None:
+        return self.category.name if self.category else None
 
 
 class SpellDefinition(Base):

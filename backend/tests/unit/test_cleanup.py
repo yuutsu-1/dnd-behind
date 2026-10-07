@@ -81,24 +81,27 @@ def test_no_phase3_legacy_symbols(path):
     assert offending == []
 
 
-def test_only_two_jsonb_columns_left_in_the_compendium():
-    """The spec's grep would also match the JSONB import line, so check the metadata."""
+def test_only_special_traits_is_jsonb_in_the_compendium():
+    """The spec's grep would also match the JSONB import line, so check the metadata
+    (phase 4: `feature_grants.effect_data` is gone)."""
     from sqlalchemy.dialects.postgresql import JSONB
 
     import app.db.models.compendium as compendium
+    import app.db.models.features as features
     import app.db.models.items as items
     import app.db.models.spells as spells
     from app.db.base import Base
 
-    modules = (compendium, items, spells)
+    modules = (compendium, features, items, spells)
     tables = {
         table for table in Base.metadata.tables.values()
         if any(getattr(module, name, None) is table or getattr(getattr(module, name, None), "__table__", None) is table
                for module in modules for name in dir(module))
     }
-    assert {"spell_definitions", "spell_materials", "spell_list_spells", "item_definitions"} <= {t.name for t in tables}
+    assert {"spell_definitions", "spell_materials", "spell_list_spells", "item_definitions", "feature_definitions",
+            "feature_effects", "feat_prerequisites"} <= {t.name for t in tables}
     jsonb = sorted(f"{t.name}.{c.name}" for t in tables for c in t.columns if isinstance(c.type, JSONB))
-    assert jsonb == ["feature_grants.effect_data", "species_definitions.special_traits"]
+    assert jsonb == ["species_definitions.special_traits"]
 
 
 # Tests never read the SRD files: they are reference only (built so this file does not match itself).
@@ -112,5 +115,20 @@ def test_tests_do_not_reference_the_docs_folder(path):
             f"{os.path.relpath(path, BACKEND_DIR)}:{number}: {line.strip()}"
             for number, line in enumerate(handle, start=1)
             if DOCS_REFERENCE.search(line)
+        ]
+    assert offending == []
+
+
+# Phase 4: the spec's grep (FeatureGrant with its JSONB effect_data and the old feat columns).
+PHASE4_FORBIDDEN = re.compile(r"feature_grants|FeatureGrant|effect_data|level_prerequisite|prerequisite_description")
+
+
+@pytest.mark.parametrize("path", sorted(_python_files("app", "alembic")))
+def test_no_phase4_legacy_symbols(path):
+    with open(path, encoding="utf-8") as handle:
+        offending = [
+            f"{os.path.relpath(path, BACKEND_DIR)}:{number}: {line.strip()}"
+            for number, line in enumerate(handle, start=1)
+            if PHASE4_FORBIDDEN.search(line)
         ]
     assert offending == []

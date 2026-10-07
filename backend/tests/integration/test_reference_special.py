@@ -1,5 +1,5 @@
 """Reference resources with special rules: sizes, challenge-ratings, character-levels,
-point-buy-costs, skills, conditions and tool-types; plus the public GET of all 27 resources."""
+point-buy-costs, skills, conditions and tool-types; plus the public GET of all 33 resources."""
 import pytest
 from sqlalchemy import func, select
 
@@ -39,7 +39,7 @@ async def people(db_session):
     return dict(a=a, p=p, b=b, c=c)
 
 
-class TestPublicGetAll27:
+class TestPublicGetAll33:
     EXPECTED_KEYS = {
         "sizes": ["tiny", "small", "medium", "large", "huge", "gargantuan"],
         "character-levels": list(range(1, 21)),
@@ -47,11 +47,11 @@ class TestPublicGetAll27:
         "challenge-ratings": CR_ORDER,
     }
 
-    def test_there_are_27_resources(self):
+    def test_there_are_33_resources(self):
         from app.api.reference import RESOURCES
 
         # + skills, conditions, tool-types
-        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 3 == 27 == len(RESOURCES)
+        assert len(SIMPLE_RESOURCES) + len(self.EXPECTED_KEYS) + 3 == 33 == len(RESOURCES)
         assert "tool-proficiencies" not in {r.slug for r in RESOURCES}
 
     @pytest.mark.parametrize("slug,key", [
@@ -474,3 +474,27 @@ class TestPhase3References:
             f"{API}/{slug}/hb_shared", json={"name": "Mine"}, headers=auth_headers(people["p"])
         )
         assert other.status_code == 403
+
+
+PHASE4_SLUGS = {
+    "effect-operations": "grant", "effect-targets": "armor_class", "value-bases": "class_level",
+    "choice-pool-types": "feat", "choice-swap-rules": "on_long_rest_one", "feature-kinds": "fighting_style",
+}
+
+
+@pytest.mark.parametrize("slug,srd_code", list(PHASE4_SLUGS.items()))
+async def test_phase4_resources_follow_the_phase1_matrix(api_client, people, slug, srd_code):
+    url = f"{API}/{slug}"
+    # Ids/headers first: the 403 below rolls the session back and expires the fixture rows.
+    campaign_id = str(people["c"].id)
+    headers, other, player = (auth_headers(people[key]) for key in ("a", "b", "p"))
+    assert (await api_client.get(f"{url}/{srd_code}")).status_code == 200
+    bad_token = {"Authorization": "Bearer not-a-token"}
+    assert (await api_client.get(url, headers=bad_token)).status_code == 401
+    assert (await api_client.patch(f"{url}/{srd_code}", json={"name": "X"}, headers=headers)).status_code == 403
+    assert (await api_client.delete(f"{url}/{srd_code}", headers=headers)).status_code == 403
+    created = await api_client.post(url, json={"code": "hb_x", "name": "X", "campaign_ids": [campaign_id]},
+                                    headers=headers)
+    assert created.status_code == 201, created.text
+    assert (await api_client.get(f"{url}/hb_x", headers=other)).status_code == 404
+    assert (await api_client.get(f"{url}/hb_x", headers=player)).status_code == 200

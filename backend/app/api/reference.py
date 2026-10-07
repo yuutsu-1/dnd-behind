@@ -96,6 +96,12 @@ RESOURCES: list[Resource] = [
     _simple("area-shapes", models.AreaShape),
     _simple("spell-lists", models.SpellList),
     _simple("casting-times", models.CastingTime),
+    _simple("effect-operations", models.EffectOperation),
+    _simple("effect-targets", models.EffectTarget),
+    _simple("value-bases", models.ValueBasis),
+    _simple("choice-pool-types", models.ChoicePoolType),
+    _simple("choice-swap-rules", models.ChoiceSwapRule),
+    _simple("feature-kinds", models.FeatureKind),
     Resource(
         "tool-types", models.ToolType, schemas.ToolTypeCreate, schemas.ToolTypeUpdate, schemas.ToolTypeOut,
         references=(

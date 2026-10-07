@@ -191,6 +191,42 @@ class CastingTime(CodeMixin, Base):
     __tablename__ = "casting_times"
 
 
+class EffectOperation(CodeMixin, Base):
+    """What a feature effect does (grant, bonus, set, advantage, heal, ...)."""
+
+    __tablename__ = "effect_operations"
+
+
+class EffectTarget(CodeMixin, Base):
+    """The number of the sheet an effect changes (armor class, initiative, ...)."""
+
+    __tablename__ = "effect_targets"
+
+
+class ValueBasis(CodeMixin, Base):
+    """What a formula multiplies (proficiency bonus, ability modifier, class level, ...)."""
+
+    __tablename__ = "value_bases"
+
+
+class ChoicePoolType(CodeMixin, Base):
+    """What a feature choice picks from (feat, spell, skill, weapon, ...)."""
+
+    __tablename__ = "choice_pool_types"
+
+
+class ChoiceSwapRule(CodeMixin, Base):
+    """When a choice made for a feature can be changed."""
+
+    __tablename__ = "choice_swap_rules"
+
+
+class FeatureKind(CodeMixin, Base):
+    """Kind of a feature (fighting style, spellcasting), used by feat prerequisites."""
+
+    __tablename__ = "feature_kinds"
+
+
 class CharacterLevel(HomebrewMixin, Base):
     __tablename__ = "character_levels"
     __table_args__ = (
@@ -214,7 +250,7 @@ class PointBuyCost(HomebrewMixin, Base):
     cost: Mapped[int]  = mapped_column(Integer, nullable=False)
 
 
-# The 27 reference models exposed under /api/compendium. `campaign_homebrew_rules`
+# The 33 reference models exposed under /api/compendium. `campaign_homebrew_rules`
 # only accepts their table names in `resource_table`.
 REFERENCE_MODELS: tuple[type[Base], ...] = (
     Ability, Skill, DamageType, Condition, CreatureType, Size,
@@ -223,6 +259,7 @@ REFERENCE_MODELS: tuple[type[Base], ...] = (
     SpellSchool, RechargeType, ActionType,
     CharacterLevel, ChallengeRating, PointBuyCost, FeatCategory, ItemType, ToolType,
     AreaShape, SpellList, CastingTime,
+    EffectOperation, EffectTarget, ValueBasis, ChoicePoolType, ChoiceSwapRule, FeatureKind,
 )
 REFERENCE_TABLE_NAMES: tuple[str, ...] = tuple(m.__tablename__ for m in REFERENCE_MODELS)
 

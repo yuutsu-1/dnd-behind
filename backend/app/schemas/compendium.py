@@ -1,36 +1,12 @@
 import uuid
 from datetime import datetime
+from typing import ClassVar
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.features import Level, FeatureIn, FeatureOut, PrerequisiteIn, PrerequisiteOut, sorted_prerequisites
 from app.schemas.proficiency_grants import GrantDescriptors, ProficiencyGrantDescriptor, ProficiencyGrantOut
-
-
-class FeatureGrantOut(BaseModel):
-    model_config = {"from_attributes": True}
-
-    id: uuid.UUID
-    source_type: str
-    source_id: uuid.UUID
-    name: str
-    description: str | None
-    effect_type: str
-    effect_data: dict
-    level_requirement: int
-    is_optional: bool
-    sort_order: int
-
-
-class FeatureGrantCreate(BaseModel):
-    source_type: str
-    source_id: uuid.UUID
-    name: str
-    description: str | None = None
-    effect_type: str
-    effect_data: dict
-    level_requirement: int = 1
-    is_optional: bool = False
-    sort_order: int = 0
+from app.schemas.reference import Code, Name, NonNegativeInt, PositiveInt, _Update, _Write
 
 
 class SpeciesOut(BaseModel):
@@ -89,7 +65,7 @@ class ClassInitialEquipmentOut(BaseModel):
 class ClassInitialEquipmentCreate(BaseModel):
     item_id: uuid.UUID
     option: str = Field(min_length=1, max_length=10)
-    quantity: int = Field(default=1, ge=1)
+    quantity: PositiveInt = 1
 
 
 class ClassOut(BaseModel):
@@ -111,6 +87,8 @@ class ClassOut(BaseModel):
     subclass_level: int
     spell_ability: str | None
     spellcasting_type: str | None
+    # Features of every level, with every child (app/schemas/features.py).
+    features: list[FeatureOut]
     source: str
     is_homebrew: bool
 
@@ -136,15 +114,37 @@ class ClassCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
-    hit_die: int
+    hit_die: PositiveInt
     primary_ability: list[str]
     proficiency_grants: GrantDescriptors = Field(default_factory=list)
-    skill_choices: int = 2
+    skill_choices: NonNegativeInt = 2
     skills: list[str] = Field(default_factory=list)
     initial_equipment: list[ClassInitialEquipmentCreate] = Field(default_factory=list)
-    subclass_level: int = 3
+    subclass_level: Level = 3
     spell_ability: str | None = None
     spellcasting_type: str | None = None
+    # Each with a `level` (1..20); references between them are positions.
+    features: list[FeatureIn] = Field(default_factory=list)
+
+
+class ClassUpdate(_Update):
+    """Fields sent are set; `features`, `proficiency_grants`, `skills`, `primary_ability`
+    and `initial_equipment`, when sent, replace the whole set. Unknown fields are a 422."""
+
+    nullable_fields: ClassVar[frozenset[str]] = frozenset({"description", "spell_ability", "spellcasting_type"})
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    hit_die: PositiveInt | None = None
+    primary_ability: list[str] | None = None
+    proficiency_grants: GrantDescriptors | None = None
+    skill_choices: NonNegativeInt | None = None
+    skills: list[str] | None = None
+    initial_equipment: list[ClassInitialEquipmentCreate] | None = None
+    subclass_level: Level | None = None
+    spell_ability: str | None = None
+    spellcasting_type: str | None = None
+    features: list[FeatureIn] | None = None
 
 
 class SubclassOut(BaseModel):
@@ -155,14 +155,26 @@ class SubclassOut(BaseModel):
     class_name: str
     name: str
     description: str | None
+    features: list[FeatureOut]
     source: str
     is_homebrew: bool
 
 
-class SubclassCreate(BaseModel):
+class SubclassCreate(_Write):
+    """`class_id` must exist (400). Each feature has a `level` (1..20)."""
+
     class_id: uuid.UUID
-    name: str = Field(min_length=1, max_length=100)
+    name: Name
     description: str | None = None
+    features: list[FeatureIn] = Field(default_factory=list)
+
+
+class SubclassUpdate(_Update):
+    """`class_id` is immutable (422). `features`, when sent, replace the whole set."""
+
+    name: Name | None = None
+    description: str | None = None
+    features: list[FeatureIn] | None = None
 
 
 class BackgroundInitialEquipmentOut(BaseModel):
@@ -179,7 +191,7 @@ class BackgroundInitialEquipmentOut(BaseModel):
 class BackgroundInitialEquipmentCreate(BaseModel):
     item_id: uuid.UUID
     option: str = Field(min_length=1, max_length=10)
-    quantity: int = Field(default=1, ge=1)
+    quantity: PositiveInt = 1
 
 
 def _validate_ability_scores_cardinality(v: list) -> list:
@@ -289,23 +301,47 @@ class BackgroundUpdate(BaseModel):
 
 
 class FeatOut(BaseModel):
+    """A feat with its prerequisites (`or_group`: same group = OR, groups = AND) and its
+    complete features. The list returns the same format as the detail."""
+
     model_config = {"from_attributes": True}
 
     id: uuid.UUID
     name: str
     description: str | None
-    category: str
-    level_prerequisite: int
-    prerequisite_description: str | None
+    category_code: str
+    category_name: str | None
     repeatable: bool
+    prerequisites: list[PrerequisiteOut]
+    features: list[FeatureOut]
     source: str
     is_homebrew: bool
 
+    @field_validator("prerequisites", mode="before")
+    @classmethod
+    def _prerequisite_order(cls, v: list) -> list:
+        return sorted_prerequisites(v)
 
-class FeatCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+
+class FeatCreate(_Write):
+    """`category_code` and every code inside `prerequisites`/`features` must exist and be
+    visible to the caller (400). The features take positions to refer to each other
+    (app/schemas/features.py)."""
+
+    name: Name
     description: str | None = None
-    category: str
-    level_prerequisite: int = 0
-    prerequisite_description: str | None = None
+    category_code: Code
     repeatable: bool = False
+    prerequisites: list[PrerequisiteIn] = Field(default_factory=list)
+    features: list[FeatureIn] = Field(default_factory=list)
+
+
+class FeatUpdate(_Update):
+    """Fields sent are set; `prerequisites` and `features`, when sent, replace the whole set."""
+
+    name: Name | None = None
+    description: str | None = None
+    category_code: Code | None = None
+    repeatable: bool | None = None
+    prerequisites: list[PrerequisiteIn] | None = None
+    features: list[FeatureIn] | None = None

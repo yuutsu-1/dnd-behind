@@ -33,6 +33,12 @@ EXPECTED_COUNTS = {
     "area_shapes": 8,
     "spell_lists": 8,
     "casting_times": 9,
+    "effect_operations": 12,
+    "effect_targets": 12,
+    "value_bases": 4,
+    "choice_pool_types": 9,
+    "choice_swap_rules": 3,
+    "feature_kinds": 2,
 }
 
 SEEDED_REFERENCE_TABLES = [t for t in EXPECTED_COUNTS if t != "condition_implications"]
@@ -240,3 +246,42 @@ async def test_casting_times_seed(db_session):
         "10_minutes": "10 Minutes", "1_hour": "1 Hour", "8_hours": "8 Hours", "12_hours": "12 Hours",
         "24_hours": "24 Hours",
     }
+
+
+PHASE4_CODES = {
+    "effect_operations": {
+        "grant", "expertise", "ability_score_increase", "damage_resistance", "damage_immunity",
+        "condition_immunity", "bonus", "set", "advantage", "heal", "spellcasting_ability", "spell_list",
+    },
+    "effect_targets": {
+        "armor_class", "initiative", "attack_roll", "damage_roll", "hit_points", "hit_point_max", "speed",
+        "critical_range", "attacks_per_action", "saving_throw", "ability_check", "death_saving_throw",
+    },
+    "value_bases": {"proficiency_bonus", "ability_modifier", "class_level", "character_level"},
+    "choice_pool_types": {
+        "feat", "spell", "skill", "tool_type", "skill_or_tool", "ability_score", "weapon", "spell_list", "feature",
+    },
+    "choice_swap_rules": {"on_class_level_up", "on_level_up_one", "on_long_rest_one"},
+    "feature_kinds": {"fighting_style", "spellcasting"},
+}
+
+
+@pytest.mark.parametrize("table,codes", list(PHASE4_CODES.items()))
+async def test_phase4_reference_codes(db_session, table, codes):
+    assert set((await db_session.execute(text(f"SELECT code FROM {table}"))).scalars()) == codes
+
+
+async def test_phase4_reference_names(db_session):
+    names = {}
+    for table in PHASE4_CODES:
+        names.update(dict((await db_session.execute(text(f"SELECT code, name FROM {table}"))).all()))
+    assert names["ability_score_increase"] == "Ability Score Increase"
+    assert names["attacks_per_action"] == "Attacks per Action"
+    assert names["critical_range"] == "Critical Range"
+    assert names["proficiency_bonus"] == "Proficiency Bonus"
+    assert names["skill_or_tool"] == "Skill or Tool"
+    assert names["on_long_rest_one"] == "Change One on Long Rest"
+    assert names["on_class_level_up"] == "On Class Level Up"
+    assert names["on_level_up_one"] == "Change One on Level Up"
+    assert names["fighting_style"] == "Fighting Style"
+    assert names["spellcasting"] == "Spellcasting"

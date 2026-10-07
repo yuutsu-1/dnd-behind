@@ -101,7 +101,7 @@ def test_squash_creates_and_drops_phase3_tables(table):
     assert f"op.drop_table('{table}')" in source
 
 
-def test_squash_share_check_lists_the_27_reference_tables():
+def test_squash_share_check_lists_the_33_reference_tables():
     from app.db.models.reference import REFERENCE_TABLE_NAMES
 
     source = _squash_source()
@@ -114,3 +114,43 @@ def test_squash_spell_name_is_not_unique():
     spells = source[source.index("op.create_table('spell_definitions'"):]
     spells = spells[:spells.index("op.create_table(", 10)]
     assert "UniqueConstraint('name')" not in spells
+
+
+# Phase 4: FeatureGrant (JSONB effect_data) and the old feat columns are gone.
+PHASE4_REMOVED = ("feature_grants", "effect_data", "effect_type", "level_prerequisite", "prerequisite_description")
+
+
+@pytest.mark.parametrize("legacy", PHASE4_REMOVED)
+def test_squash_does_not_reference_phase4_removed_names(legacy):
+    assert legacy not in _squash_source()
+
+
+PHASE4_TABLES = (
+    "effect_operations", "effect_targets", "value_bases", "choice_pool_types", "choice_swap_rules", "feature_kinds",
+    "feat_prerequisites", "feature_definitions", "feature_effects", "feature_choices", "feature_choice_options",
+    "feature_resources", "feature_resource_recharges", "feature_scaling",
+)
+
+
+@pytest.mark.parametrize("table", PHASE4_TABLES)
+def test_squash_creates_and_drops_phase4_tables(table):
+    source = _squash_source()
+    assert f"op.create_table('{table}'" in source
+    assert f"op.drop_table('{table}')" in source
+
+
+def test_squash_feat_name_is_not_unique_and_has_category_code():
+    source = _squash_source()
+    feats = source[source.index("op.create_table('feat_definitions'"):]
+    feats = feats[:feats.index("op.create_table(", 10)]
+    assert "UniqueConstraint('name')" not in feats
+    assert "sa.Column('category_code'" in feats
+    assert "sa.Column('category'," not in feats
+
+
+def test_squash_class_name_stays_unique():
+    """Gate #2, B1: the class name stays UNIQUE."""
+    source = _squash_source()
+    classes = source[source.index("op.create_table('class_definitions'"):]
+    classes = classes[:classes.index("op.create_table(", 10)]
+    assert "sa.UniqueConstraint('name')" in classes

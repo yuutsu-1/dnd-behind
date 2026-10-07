@@ -320,7 +320,7 @@ class TestBackgroundDefinition:
         assert {"ability_scores", "feat", "proficiency_grants", "initial_equipment"} <= relationships
 
     def test_feat_name_property(self):
-        feat = FeatDefinition(id=uuid.uuid4(), name="Alert", category="origin")
+        feat = FeatDefinition(id=uuid.uuid4(), name="Alert", category_code="origin")
         background = BackgroundDefinition(
             id=uuid.uuid4(),
             name="Noble",

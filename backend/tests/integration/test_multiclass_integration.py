@@ -37,7 +37,7 @@ class TestAddCharacterClassEndpoint:
     async def test_adds_class_via_api(self, db_session):
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
-        klass = await seed_class(db_session, name="Fighter", hit_die=10)
+        klass = await seed_class(db_session, name="Test Fighter", hit_die=10)
 
         entry = await add_character_class(
             character.id, CharacterClassCreate(class_id=klass.id, level=3), current_user=owner, db=db_session
@@ -52,7 +52,7 @@ class TestAddCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        klass = await seed_class(db_session, name="Fighter")
+        klass = await seed_class(db_session, name="Test Fighter")
         await add_character_class(
             character_id, CharacterClassCreate(class_id=klass.id, level=1), current_user=owner, db=db_session
         )
@@ -72,7 +72,7 @@ class TestAddCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        klass_a = await seed_class(db_session, name="Fighter")
+        klass_a = await seed_class(db_session, name="Test Fighter")
         klass_b = await seed_class(db_session, name="Wizard")
         klass_a_id, klass_b_id = klass_a.id, klass_b.id
         await add_character_class(
@@ -90,7 +90,7 @@ class TestAddCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        fighter = await seed_class(db_session, name="Fighter", hit_die=10)
+        fighter = await seed_class(db_session, name="Test Fighter", hit_die=10)
         wizard = await seed_class(db_session, name="Wizard", hit_die=6)
         fighter_id, wizard_id = fighter.id, wizard.id
 
@@ -108,8 +108,8 @@ class TestAddCharacterClassEndpoint:
 
         assert out.total_level == 5
         pool_by_class = {c.class_name: c for c in out.classes}
-        assert pool_by_class["Fighter"].hit_die == 10
-        assert pool_by_class["Fighter"].hit_dice_total == 3
+        assert pool_by_class["Test Fighter"].hit_die == 10
+        assert pool_by_class["Test Fighter"].hit_dice_total == 3
         assert pool_by_class["Wizard"].hit_die == 6
         assert pool_by_class["Wizard"].hit_dice_total == 2
         # Hit dice must never be collapsed into a single combined value.
@@ -173,7 +173,7 @@ class TestUpdateCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        klass = await seed_class(db_session, name="Fighter")
+        klass = await seed_class(db_session, name="Test Fighter")
         entry = await seed_character_class(db_session, character, klass, level=3)
         entry_id = entry.id
 
@@ -188,7 +188,7 @@ class TestUpdateCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        klass = await seed_class(db_session, name="Fighter")
+        klass = await seed_class(db_session, name="Test Fighter")
         entry = await seed_character_class(db_session, character, klass, level=5)
         entry_id = entry.id
 
@@ -205,7 +205,7 @@ class TestRemoveCharacterClassEndpoint:
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
         character_id = character.id
-        klass = await seed_class(db_session, name="Fighter")
+        klass = await seed_class(db_session, name="Test Fighter")
         entry = await seed_character_class(db_session, character, klass, level=2)
         entry_id = entry.id
 
@@ -222,7 +222,7 @@ class TestRestrictDeleteOfReferencedDefinitions:
     async def test_deleting_class_definition_in_use_is_blocked_by_fk(self, db_session):
         owner = await seed_user(db_session)
         character = await seed_character(db_session, owner=owner)
-        klass = await seed_class(db_session, name="Fighter")
+        klass = await seed_class(db_session, name="Test Fighter")
         await seed_character_class(db_session, character, klass, level=2)
 
         await db_session.delete(klass)

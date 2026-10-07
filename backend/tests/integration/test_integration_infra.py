@@ -196,3 +196,84 @@ class TestSpellFactories:
         link = await seed_character_spell(db_session, character, spell)
         fetched = (await db_session.execute(select(CharacterSpell).where(CharacterSpell.id == link.id))).scalar_one()
         assert (fetched.character_id, fetched.spell_id) == (character.id, spell.id)
+
+
+class TestFeatureFactories:
+    async def test_seed_feat_defaults_and_homebrew(self, db_session):
+        from tests.integration.conftest import seed_feat
+
+        user = await seed_user(db_session)
+        srd_like = await seed_feat(db_session)
+        assert (srd_like.category_code, srd_like.is_homebrew, srd_like.created_by) == ("origin", False, None)
+        homebrew = await seed_feat(db_session, author=user, category_code="general")
+        assert (homebrew.category_code, homebrew.source, homebrew.is_homebrew, homebrew.created_by) == (
+            "general", "homebrew", True, user.id,
+        )
+
+    async def test_homebrew_feat_with_two_complete_features(self, db_session):
+        from sqlalchemy import func
+
+        from app.db.models.features import (
+            FeatureChoice,
+            FeatureChoiceOption,
+            FeatureDefinition,
+            FeatureEffect,
+            FeatureResource,
+            FeatureResourceRecharge,
+            FeatureScaling,
+        )
+        from tests.integration.conftest import seed_feat, seed_feature
+
+        user = await seed_user(db_session)
+        feat = await seed_feat(db_session, author=user)
+        first = await seed_feature(db_session, feat=feat, name="Boost", effects=[dict(
+            operation_code="ability_score_increase", value=1, max_value=20,
+            choice=dict(pool_type_code="ability_score", choose_count=1,
+                        options=[dict(ability_code="str"), dict(ability_code="dex")],
+                        scaling=[dict(level=5, value=2)]),
+        )])
+        second = await seed_feature(db_session, feat=feat, name="Luck", resources=[dict(
+            name="Luck", value=1,
+            recharges=[dict(recharge_type_code="short_rest", recovers=1), dict(recharge_type_code="long_rest")],
+            scaling=[dict(level=10, value=2)],
+        )])
+        assert (first.feat_id, first.level, first.source, first.is_homebrew, first.created_by) == (
+            feat.id, None, "homebrew", True, user.id,
+        )
+        assert (first.sort_order, second.sort_order) == (0, 1)
+
+        async def count(model, *where):
+            return await db_session.scalar(select(func.count()).select_from(model).where(*where))
+
+        ids = [first.id, second.id]
+        assert await count(FeatureDefinition, FeatureDefinition.feat_id == feat.id) == 2
+        assert await count(FeatureEffect, FeatureEffect.feature_id.in_(ids)) == 1
+        effect_ids = select(FeatureEffect.id).where(FeatureEffect.feature_id.in_(ids))
+        choice_ids = select(FeatureChoice.id).where(FeatureChoice.effect_id.in_(effect_ids))
+        resource_ids = select(FeatureResource.id).where(FeatureResource.feature_id.in_(ids))
+        assert await count(FeatureChoice, FeatureChoice.id.in_(choice_ids)) == 1
+        assert await count(FeatureChoiceOption, FeatureChoiceOption.choice_id.in_(choice_ids)) == 2
+        assert await count(FeatureResource, FeatureResource.id.in_(resource_ids)) == 1
+        assert await count(FeatureResourceRecharge, FeatureResourceRecharge.resource_id.in_(resource_ids)) == 2
+        assert await count(FeatureScaling, FeatureScaling.choice_id.in_(choice_ids)) == 1
+        assert await count(FeatureScaling, FeatureScaling.resource_id.in_(resource_ids)) == 1
+
+    async def test_seed_feature_of_a_class_has_a_level(self, db_session):
+        from tests.integration.conftest import seed_class, seed_feature
+
+        user = await seed_user(db_session)
+        klass = await seed_class(db_session, author=user)
+        feature = await seed_feature(db_session, class_def=klass, level=3)
+        assert (feature.class_id, feature.level, feature.created_by) == (klass.id, 3, user.id)
+
+    async def test_srd_helpers_find_the_seed(self, db_session):
+        from tests.integration.conftest import srd_class, srd_feat, srd_feature, srd_subclass
+
+        fighter = await srd_class(db_session, "Fighter")
+        assert (fighter.name, fighter.hit_die, fighter.is_homebrew) == ("Fighter", 10, False)
+        champion = await srd_subclass(db_session, "Champion")
+        assert champion.class_id == fighter.id
+        grappler = await srd_feat(db_session, "Grappler")
+        assert grappler.category_code == "general"
+        second_wind = await srd_feature(db_session, "class:Fighter/1/Second Wind")
+        assert (second_wind.class_id, second_wind.action_type_code) == (fighter.id, "bonus_action")

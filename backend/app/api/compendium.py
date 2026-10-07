@@ -12,7 +12,6 @@ from app.db.models.compendium import (
     ClassDefinition,
     ClassInitialEquipment,
     FeatDefinition,
-    FeatureGrant,
     ItemDefinition,
     SpeciesDefinition,
     SubclassDefinition,
@@ -21,15 +20,18 @@ from app.db.models.reference import Ability, Size, Skill
 from app.db.models.user import User
 from app.schemas.compendium import (
     BackgroundCreate, BackgroundOut, BackgroundUpdate,
-    ClassCreate, ClassOut,
-    FeatCreate, FeatOut,
-    FeatureGrantCreate, FeatureGrantOut,
+    ClassCreate, ClassOut, ClassUpdate,
+    FeatCreate, FeatOut, FeatUpdate,
     SpeciesCreate, SpeciesOut,
-    SubclassCreate, SubclassOut,
+    SubclassCreate, SubclassOut, SubclassUpdate,
 )
+from app.schemas.features import FeatureOut
 from app.schemas.items import ItemCreate, ItemOut, ItemUpdate
 from app.schemas.spells import SpellCreate, SpellOut, SpellUpdate
 from app.schemas.proficiency_grants import ProficiencyGrantOut
+from app.services import classes as class_service
+from app.services import feats as feat_service
+from app.services import features as feature_service
 from app.services import items as item_service
 from app.services import proficiency_grants as grant_service
 from app.services import spells as spell_service
@@ -73,19 +75,15 @@ async def create_species(data: SpeciesCreate, current_user: CurrentUser, db: DB)
     await db.refresh(obj)
     return obj
 
+# Classes are global; `user` is optional: no token -> anonymous, invalid token -> 401.
 @router.get("/classes", response_model=list[ClassOut])
-async def list_classes(db: DB, search: str | None = Query(default=None)):
-    q = select(ClassDefinition)
-    if search:
-        q = q.where(ClassDefinition.name.ilike(f"%{search}%"))
-    result = await db.execute(q)
-    return list(result.scalars().all())
+async def list_classes(db: DB, user: OptionalUser = None, search: str | None = Query(default=None)):
+    return await class_service.list_classes(db, search=search)
 
 
 @router.get("/classes/{class_id}", response_model=ClassOut)
-async def get_class(class_id: uuid.UUID, db: DB):
-    result = await db.execute(select(ClassDefinition).where(ClassDefinition.id == class_id))
-    obj = result.scalar_one_or_none()
+async def get_class(class_id: uuid.UUID, db: DB, user: OptionalUser = None):
+    obj = await class_service.get_class(db, class_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Class not found")
     return obj
@@ -93,59 +91,55 @@ async def get_class(class_id: uuid.UUID, db: DB):
 
 @router.post("/classes", response_model=ClassOut, status_code=201)
 async def create_class(data: ClassCreate, current_user: CurrentUser, db: DB):
-    # Everything is validated before anything is written; any error rolls back.
-    try:
-        primary_ability = await _resolve(db, Ability, data.primary_ability, current_user, "ability score")
-        skills = await _resolve(db, Skill, data.skills, current_user, "skill")
-        if data.spell_ability is not None:
-            await _resolve(db, Ability, [data.spell_ability], current_user, "ability score")
-        await _validate_items_exist(db, data.initial_equipment)
-        # May create grants: they are discarded by the rollback if anything fails later.
-        grants = await grant_service.resolve_grants(db, data.proficiency_grants, current_user)
+    """Everything (features included) is validated before anything is written."""
+    return await class_service.create_class(db, data, current_user)
 
-        obj = ClassDefinition(
-            name=data.name,
-            description=data.description,
-            hit_die=data.hit_die,
-            skill_choices=data.skill_choices,
-            subclass_level=data.subclass_level,
-            spell_ability=data.spell_ability,
-            spellcasting_type=data.spellcasting_type,
-            is_homebrew=True,
-            created_by=current_user.id,
-            primary_ability=primary_ability,
-            proficiency_grants=grants,
-            skills=skills,
-            initial_equipment=[
-                ClassInitialEquipment(item_id=e.item_id, option=e.option, quantity=e.quantity)
-                for e in data.initial_equipment
-            ],
-        )
-        db.add(obj)
-        await db.commit()
-    except HTTPException:
-        await db.rollback()
-        raise
-    await db.refresh(obj)
-    return obj
+
+@router.patch("/classes/{class_id}", response_model=ClassOut)
+async def update_class(class_id: uuid.UUID, data: ClassUpdate, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew (SRD/other author -> 403, missing -> 404)."""
+    return await class_service.update_class(db, class_id, data, current_user)
+
+
+@router.delete("/classes/{class_id}", status_code=204)
+async def delete_class(class_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; 409 while used by a character or subclass, or while
+    one of its features is referenced from outside."""
+    await class_service.delete_class(db, class_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/subclasses", response_model=list[SubclassOut])
-async def list_subclasses(db: DB, class_id: uuid.UUID | None = Query(default=None)):
-    q = select(SubclassDefinition).options(selectinload(SubclassDefinition.class_def))
-    if class_id:
-        q = q.where(SubclassDefinition.class_id == class_id)
-    result = await db.execute(q)
-    return list(result.scalars().all())
+async def list_subclasses(
+    db: DB, user: OptionalUser = None, class_id: uuid.UUID | None = Query(default=None),
+):
+    return await class_service.list_subclasses(db, class_id=class_id)
+
+
+@router.get("/subclasses/{subclass_id}", response_model=SubclassOut)
+async def get_subclass(subclass_id: uuid.UUID, db: DB, user: OptionalUser = None):
+    obj = await class_service.get_subclass(db, subclass_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Subclass not found")
+    return obj
 
 
 @router.post("/subclasses", response_model=SubclassOut, status_code=201)
 async def create_subclass(data: SubclassCreate, current_user: CurrentUser, db: DB):
-    obj = SubclassDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
-    db.add(obj)
-    await db.commit()
-    await db.refresh(obj, attribute_names=["class_def"])
-    return obj
+    return await class_service.create_subclass(db, data, current_user)
+
+
+@router.patch("/subclasses/{subclass_id}", response_model=SubclassOut)
+async def update_subclass(subclass_id: uuid.UUID, data: SubclassUpdate, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; `class_id` cannot change (422)."""
+    return await class_service.update_subclass(db, subclass_id, data, current_user)
+
+
+@router.delete("/subclasses/{subclass_id}", status_code=204)
+async def delete_subclass(subclass_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; 409 while used by a character."""
+    await class_service.delete_subclass(db, subclass_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/backgrounds", response_model=list[BackgroundOut])
@@ -262,28 +256,42 @@ async def update_background(background_id: uuid.UUID, data: BackgroundUpdate, cu
     await db.refresh(obj)
     return obj
 
+# Feats are global (every user sees every feat); `user` is optional: no token ->
+# anonymous, invalid token -> 401. The list has the format of the detail.
 @router.get("/feats", response_model=list[FeatOut])
 async def list_feats(
     db: DB,
+    user: OptionalUser,
     category: str | None = Query(default=None),
     search: str | None = Query(default=None),
 ):
-    q = select(FeatDefinition)
-    if category:
-        q = q.where(FeatDefinition.category == category)
-    if search:
-        q = q.where(FeatDefinition.name.ilike(f"%{search}%"))
-    result = await db.execute(q)
-    return list(result.scalars().all())
+    return await feat_service.list_feats(db, category=category, search=search)
+
+
+@router.get("/feats/{feat_id}", response_model=FeatOut)
+async def get_feat(feat_id: uuid.UUID, db: DB, user: OptionalUser):
+    obj = await feat_service.get_feat(db, feat_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Feat not found")
+    return obj
 
 
 @router.post("/feats", response_model=FeatOut, status_code=201)
 async def create_feat(data: FeatCreate, current_user: CurrentUser, db: DB):
-    obj = FeatDefinition(**data.model_dump(), is_homebrew=True, created_by=current_user.id)
-    db.add(obj)
-    await db.commit()
-    await db.refresh(obj)
-    return obj
+    return await feat_service.create_feat(db, data, current_user)
+
+
+@router.patch("/feats/{feat_id}", response_model=FeatOut)
+async def update_feat(feat_id: uuid.UUID, data: FeatUpdate, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew (SRD/other author -> 403, missing -> 404)."""
+    return await feat_service.update_feat(db, feat_id, data, current_user)
+
+
+@router.delete("/feats/{feat_id}", status_code=204)
+async def delete_feat(feat_id: uuid.UUID, current_user: CurrentUser, db: DB):
+    """Only the author, only homebrew; 409 while the feat (or one of its features) is referenced."""
+    await feat_service.delete_feat(db, feat_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Spells are global (every user sees every spell); `user` is optional: no token ->
 # anonymous, invalid token -> 401. Filters take codes; an unknown code matches nothing.
@@ -386,26 +394,26 @@ async def get_proficiency_grant(grant_id: uuid.UUID, db: DB, user: OptionalUser)
     return grant
 
 
-@router.get("/feature-grants", response_model=list[FeatureGrantOut])
-async def list_feature_grants(
+# Features are global and read-only here: they are written embedded in their owner
+# (feat, class, subclass). Any other method on these paths is a 405.
+@router.get("/features", response_model=list[FeatureOut])
+async def list_features(
     db: DB,
-    source_type: str | None = Query(default=None),
-    source_id: uuid.UUID | None = Query(default=None),
+    user: OptionalUser,
+    class_id: uuid.UUID | None = Query(default=None),
+    subclass_id: uuid.UUID | None = Query(default=None),
+    feat_id: uuid.UUID | None = Query(default=None),
+    level: int | None = Query(default=None, ge=1, le=20),
+    kind: str | None = Query(default=None),
 ):
-    q = select(FeatureGrant)
-    if source_type:
-        q = q.where(FeatureGrant.source_type == source_type)
-    if source_id:
-        q = q.where(FeatureGrant.source_id == source_id)
-    q = q.order_by(FeatureGrant.level_requirement, FeatureGrant.sort_order)
-    result = await db.execute(q)
-    return list(result.scalars().all())
+    return await feature_service.list_features(
+        db, class_id=class_id, subclass_id=subclass_id, feat_id=feat_id, level=level, kind=kind,
+    )
 
 
-@router.post("/feature-grants", response_model=FeatureGrantOut, status_code=201)
-async def create_feature_grant(data: FeatureGrantCreate, current_user: CurrentUser, db: DB):
-    obj = FeatureGrant(**data.model_dump())
-    db.add(obj)
-    await db.commit()
-    await db.refresh(obj)
+@router.get("/features/{feature_id}", response_model=FeatureOut)
+async def get_feature(feature_id: uuid.UUID, db: DB, user: OptionalUser):
+    obj = await feature_service.get_feature(db, feature_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Feature not found")
     return obj

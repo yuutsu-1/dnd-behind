@@ -178,18 +178,20 @@ async def seed_species(session: AsyncSession, **overrides) -> SpeciesDefinition:
     return obj
 
 
-async def seed_feat(session: AsyncSession, **overrides) -> FeatDefinition:
+async def seed_feat(session: AsyncSession, author: User | None = None, **overrides) -> FeatDefinition:
+    """A feat without prerequisites or features (category `origin` by default). With
+    `author` it is homebrew of that user; otherwise it looks like an SRD row."""
     defaults = dict(
         id=uuid.uuid4(),
         name=f"Feat-{uuid.uuid4().hex[:10]}",
         description=None,
-        category="origin",
-        level_prerequisite=0,
-        prerequisite_description=None,
+        category_code="origin",
         repeatable=False,
         source="srd",
         is_homebrew=False,
     )
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
     defaults.update(overrides)
     obj = FeatDefinition(**defaults)
     session.add(obj)
@@ -238,7 +240,7 @@ async def seed_background_initial_equipment(
     return obj
 
 
-async def seed_class(session: AsyncSession, **overrides) -> ClassDefinition:
+async def seed_class(session: AsyncSession, author: User | None = None, **overrides) -> ClassDefinition:
     defaults = dict(
         id=uuid.uuid4(),
         name=f"Class-{uuid.uuid4().hex[:10]}",
@@ -251,6 +253,8 @@ async def seed_class(session: AsyncSession, **overrides) -> ClassDefinition:
         source="srd",
         is_homebrew=False,
     )
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
     defaults.update(overrides)
     obj = ClassDefinition(**defaults)
     session.add(obj)
@@ -258,7 +262,9 @@ async def seed_class(session: AsyncSession, **overrides) -> ClassDefinition:
     return obj
 
 
-async def seed_subclass(session: AsyncSession, class_def: ClassDefinition, **overrides) -> SubclassDefinition:
+async def seed_subclass(
+    session: AsyncSession, class_def: ClassDefinition, author: User | None = None, **overrides
+) -> SubclassDefinition:
     defaults = dict(
         id=uuid.uuid4(),
         class_id=class_def.id,
@@ -267,6 +273,8 @@ async def seed_subclass(session: AsyncSession, class_def: ClassDefinition, **ove
         source="srd",
         is_homebrew=False,
     )
+    if author is not None:
+        defaults.update(source="homebrew", is_homebrew=True, created_by=author.id)
     defaults.update(overrides)
     obj = SubclassDefinition(**defaults)
     session.add(obj)
@@ -644,15 +652,20 @@ async def seed_inventory_entry(
     return obj
 
 
-def _srd_spell_namespace() -> uuid.UUID:
-    """`SRD_SPELL_NAMESPACE` of the squash (alembic/versions is not importable as a package)."""
+def squash_namespace(name: str) -> uuid.UUID:
+    """A uuid5 namespace constant (`SRD_*_NAMESPACE`) of the squash (alembic/versions is
+    not importable as a package)."""
     import re
 
     backend = os.path.dirname(os.path.dirname(_INTEGRATION_DIR))
     path = os.path.join(backend, "alembic", "versions", "c1fcfd7fe014_initial_schema.py")
     with open(path, encoding="utf-8") as handle:
-        match = re.search(r'SRD_SPELL_NAMESPACE = uuid\.UUID\("([0-9a-f-]+)"\)', handle.read())
+        match = re.search(rf'{name} = uuid\.UUID\("([0-9a-f-]+)"\)', handle.read())
     return uuid.UUID(match.group(1))
+
+
+def _srd_spell_namespace() -> uuid.UUID:
+    return squash_namespace("SRD_SPELL_NAMESPACE")
 
 
 def srd_spell_id(name: str) -> uuid.UUID:
@@ -729,3 +742,129 @@ async def seed_character_spell(
     session.add(obj)
     await session.flush()
     return obj
+
+
+# --- features (phase 4) -------------------------------------------------------------
+
+async def _seed_scaling(session: AsyncSession, column: str, target_id: uuid.UUID, rows) -> None:
+    from app.db.models.features import FeatureScaling
+
+    for row in rows:
+        session.add(FeatureScaling(**{column: target_id}, **row))
+
+
+async def seed_feature(
+    session: AsyncSession,
+    *,
+    class_def: ClassDefinition | None = None,
+    subclass: SubclassDefinition | None = None,
+    feat: FeatDefinition | None = None,
+    effects: list[dict] = (),
+    resources: list[dict] = (),
+    **overrides,
+):
+    """A feature of exactly one owner (provenance copied from it) with its children,
+    written directly in the database. `effects`/`resources` take the shape of the API
+    payload: an effect may have a `choice` (with `options` and `scaling`), `scaling` and
+    `resource_index`; a resource has `recharges` and may have `scaling`. Class/subclass
+    features get level 1 unless `level` is given; `sort_order` is the next position."""
+    from sqlalchemy import func
+
+    from app.db.models.features import (
+        FeatureChoice,
+        FeatureChoiceOption,
+        FeatureDefinition,
+        FeatureEffect,
+        FeatureResource,
+        FeatureResourceRecharge,
+    )
+
+    owner = class_def or subclass or feat
+    owner_column = "class_id" if class_def else "subclass_id" if subclass else "feat_id"
+    owner_filter = getattr(FeatureDefinition, owner_column) == owner.id
+    position = await session.scalar(select(func.count()).select_from(FeatureDefinition).where(owner_filter))
+    defaults = dict(
+        id=uuid.uuid4(), name=f"Feature-{uuid.uuid4().hex[:10]}", description=None, sort_order=position,
+        level=None if feat is not None else 1, source=owner.source, is_homebrew=owner.is_homebrew,
+        created_by=owner.created_by, **{owner_column: owner.id},
+    )
+    defaults.update(overrides)
+    feature = FeatureDefinition(**defaults)
+    session.add(feature)
+    await session.flush()
+
+    resource_ids = []
+    for index, resource in enumerate(resources):
+        row = FeatureResource(
+            id=uuid.uuid4(), feature_id=feature.id, sort_order=index,
+            **{k: v for k, v in resource.items() if k not in ("recharges", "scaling")},
+        )
+        session.add(row)
+        await session.flush()
+        resource_ids.append(row.id)
+        for recharge in resource.get("recharges", ()):
+            session.add(FeatureResourceRecharge(resource_id=row.id, **recharge))
+        await _seed_scaling(session, "resource_id", row.id, resource.get("scaling", ()))
+    for index, effect in enumerate(effects):
+        values = {k: v for k, v in effect.items() if k not in ("choice", "scaling", "resource_index")}
+        if "resource_index" in effect:
+            values["resource_id"] = resource_ids[effect["resource_index"]]
+        row = FeatureEffect(id=uuid.uuid4(), feature_id=feature.id, sort_order=index, **values)
+        session.add(row)
+        await session.flush()
+        await _seed_scaling(session, "effect_id", row.id, effect.get("scaling", ()))
+        choice = effect.get("choice")
+        if choice is not None:
+            choice_row = FeatureChoice(
+                id=uuid.uuid4(), effect_id=row.id,
+                **{k: v for k, v in choice.items() if k not in ("options", "scaling")},
+            )
+            session.add(choice_row)
+            await session.flush()
+            for option in choice.get("options", ()):
+                session.add(FeatureChoiceOption(choice_id=choice_row.id, **option))
+            await _seed_scaling(session, "choice_id", choice_row.id, choice.get("scaling", ()))
+    await session.flush()
+    return feature
+
+
+def srd_feat_id(name: str) -> uuid.UUID:
+    return uuid.uuid5(squash_namespace("SRD_FEAT_NAMESPACE"), name)
+
+
+def srd_class_id(name: str = "Fighter") -> uuid.UUID:
+    return uuid.uuid5(squash_namespace("SRD_CLASS_NAMESPACE"), name)
+
+
+def srd_subclass_id(name: str = "Champion") -> uuid.UUID:
+    return uuid.uuid5(squash_namespace("SRD_SUBCLASS_NAMESPACE"), name)
+
+
+def srd_feature_id(key: str) -> uuid.UUID:
+    """Id of a seeded feature by its path, e.g. "class:Fighter/1/Second Wind" or
+    "feat:Alert/-/Initiative Proficiency"."""
+    return uuid.uuid5(squash_namespace("SRD_FEATURE_NAMESPACE"), key)
+
+
+async def srd_feat(session: AsyncSession, name: str) -> FeatDefinition:
+    return (await session.execute(select(FeatDefinition).where(FeatDefinition.id == srd_feat_id(name)))).scalar_one()
+
+
+async def srd_class(session: AsyncSession, name: str = "Fighter") -> ClassDefinition:
+    return (await session.execute(
+        select(ClassDefinition).where(ClassDefinition.id == srd_class_id(name))
+    )).scalar_one()
+
+
+async def srd_subclass(session: AsyncSession, name: str = "Champion") -> SubclassDefinition:
+    return (await session.execute(
+        select(SubclassDefinition).where(SubclassDefinition.id == srd_subclass_id(name))
+    )).scalar_one()
+
+
+async def srd_feature(session: AsyncSession, key: str):
+    from app.db.models.features import FeatureDefinition
+
+    return (await session.execute(
+        select(FeatureDefinition).where(FeatureDefinition.id == srd_feature_id(key))
+    )).unique().scalar_one()

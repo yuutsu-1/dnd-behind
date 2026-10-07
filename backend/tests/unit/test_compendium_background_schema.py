@@ -163,7 +163,7 @@ class TestBackgroundUpdatePartial:
 
 class TestBackgroundOutSerialization:
     def test_populated_from_relationships(self):
-        feat = FeatDefinition(id=uuid.uuid4(), name="Skilled", category="origin")
+        feat = FeatDefinition(id=uuid.uuid4(), name="Skilled", category_code="origin")
         item = ItemDefinition(id=uuid.uuid4(), name="Signet Ring", item_type_code="adventuring_gear")
         background_id = uuid.uuid4()
         equipment_entry = BackgroundInitialEquipment(

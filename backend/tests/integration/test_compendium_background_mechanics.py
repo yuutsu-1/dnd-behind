@@ -64,7 +64,7 @@ def _noble_kwargs(feat_id: uuid.UUID, item_ids: list[uuid.UUID], **overrides) ->
 class TestCreateBackgroundNobleCase:
     async def test_full_noble_payload_echoes_all_five_mechanical_components(self, db_session):
         creator = await seed_user(db_session)
-        feat = await seed_feat(db_session, name="Skilled", category="origin")
+        feat = await seed_feat(db_session, name="Skilled", category_code="origin")
         fine_clothes = await seed_item(db_session, name="Fine Clothes")
         signet_ring = await seed_item(db_session, name="Signet Ring")
         purse = await seed_item(db_session, name="Purse")

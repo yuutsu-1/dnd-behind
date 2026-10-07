@@ -343,3 +343,107 @@ async def test_spell_list_without_links_can_be_deleted(api_client, db_session, a
     assert response.status_code == 204
     assert not await _exists(db_session, SpellList, "hb_free")
     assert await _shares(db_session, "spell_lists", "hb_free") == 0
+
+
+# --- phase 4: references used by features, prerequisites and feats ------------------------
+
+def _feature_use(kind: str, code: str) -> dict:
+    """`seed_feature` kwargs using the homebrew `code` of the reference `kind`."""
+    uses = {
+        "effect_targets": dict(effects=[dict(operation_code="bonus", target_code=code, value=1)]),
+        "effect_operations": dict(effects=[dict(operation_code=code)]),
+        "value_bases": dict(effects=[dict(operation_code="bonus", target_code="initiative", value_basis_code=code)]),
+        "choice_pool_types": dict(effects=[dict(operation_code="grant", choice=dict(pool_type_code=code,
+                                                                                    choose_count=1))]),
+        "choice_swap_rules": dict(effects=[dict(operation_code="grant", choice=dict(
+            pool_type_code="weapon", choose_count=1, swap_rule_code=code))]),
+        "feature_kinds": dict(feature_kind_code=code),
+        "recharge_types": dict(resources=[dict(name="Uses", value=1, recharges=[dict(recharge_type_code=code)])]),
+        "feat_categories": dict(effects=[dict(operation_code="grant", choice=dict(
+            pool_type_code="feat", choose_count=1, feat_category_code=code))]),
+    }
+    return uses[kind]
+
+
+PHASE4_USES = [
+    ("effect-targets", "effect_targets"), ("effect-operations", "effect_operations"),
+    ("value-bases", "value_bases"), ("choice-pool-types", "choice_pool_types"),
+    ("choice-swap-rules", "choice_swap_rules"), ("feature-kinds", "feature_kinds"),
+    ("recharge-types", "recharge_types"), ("feat-categories", "feat_categories"),
+]
+
+
+@pytest.mark.parametrize("slug,table", PHASE4_USES)
+async def test_reference_used_by_a_feature_is_409(api_client, db_session, author, slug, table):
+    from app.db.models.reference import REFERENCE_MODELS
+    from tests.integration.conftest import seed_feat, seed_feature
+
+    model = next(m for m in REFERENCE_MODELS if m.__tablename__ == table)
+    entry = await seed_reference(db_session, model, author=author["user"], campaigns=[author["campaign"]])
+    code = entry.code
+    feat = await seed_feat(db_session, author=author["user"])
+    await seed_feature(db_session, feat=feat, **_feature_use(table, code))
+    await db_session.commit()
+
+    response = await api_client.delete(f"{API}/{slug}/{code}", headers=author["headers"])
+    assert response.status_code == 409
+    assert await _exists(db_session, model, code)
+    assert await _shares(db_session, table, code) == 1
+
+
+async def test_feature_kind_used_by_a_prerequisite_is_409(api_client, db_session, author):
+    from app.db.models.features import FeatPrerequisite
+    from app.db.models.reference import FeatureKind
+    from tests.integration.conftest import seed_feat
+
+    await seed_reference(db_session, FeatureKind, author=author["user"], code="rage_kind", name="Rage")
+    feat = await seed_feat(db_session, author=author["user"])
+    db_session.add(FeatPrerequisite(feat_id=feat.id, or_group=1, feature_kind_code="rage_kind"))
+    await db_session.commit()
+    assert (await api_client.delete(f"{API}/feature-kinds/rage_kind", headers=author["headers"])).status_code == 409
+    assert await _exists(db_session, FeatureKind, "rage_kind")
+
+
+async def test_feat_category_used_by_a_feat_is_409(api_client, db_session, author):
+    from app.db.models.reference import FeatCategory
+    from tests.integration.conftest import seed_feat
+
+    await seed_reference(db_session, FeatCategory, author=author["user"], code="mythic", name="Mythic")
+    await seed_feat(db_session, author=author["user"], category_code="mythic")
+    await db_session.commit()
+    assert (await api_client.delete(f"{API}/feat-categories/mythic", headers=author["headers"])).status_code == 409
+    assert await _exists(db_session, FeatCategory, "mythic")
+
+
+async def test_unused_phase4_reference_is_deleted(api_client, db_session, author):
+    from app.db.models.reference import EffectTarget
+
+    await seed_reference(db_session, EffectTarget, author=author["user"], code="luck_roll", name="Luck Roll")
+    await db_session.commit()
+    assert (await api_client.delete(f"{API}/effect-targets/luck_roll", headers=author["headers"])).status_code == 204
+    assert not await _exists(db_session, EffectTarget, "luck_roll")
+
+
+async def test_homebrew_spell_target_of_an_effect_is_409(api_client, db_session, author):
+    from tests.integration.conftest import seed_feat, seed_feature, seed_spell
+
+    spell = await seed_spell(db_session, author=author["user"])
+    spell_id = spell.id
+    feat = await seed_feat(db_session, author=author["user"])
+    await seed_feature(db_session, feat=feat, effects=[dict(operation_code="grant", spell_id=spell_id)])
+    await db_session.commit()
+    assert (await api_client.delete(f"{API}/spells/{spell_id}", headers=author["headers"])).status_code == 409
+    assert (await api_client.get(f"{API}/spells/{spell_id}")).status_code == 200
+
+
+async def test_homebrew_item_in_a_choice_option_is_409(api_client, db_session, author):
+    from tests.integration.conftest import seed_feat, seed_feature
+
+    weapon = await seed_weapon(db_session, author=author["user"])
+    weapon_id = weapon.id
+    feat = await seed_feat(db_session, author=author["user"])
+    await seed_feature(db_session, feat=feat, effects=[dict(operation_code="grant", choice=dict(
+        pool_type_code="weapon", choose_count=1, options=[dict(item_id=weapon_id)]))])
+    await db_session.commit()
+    assert (await api_client.delete(f"{API}/items/{weapon_id}", headers=author["headers"])).status_code == 409
+    assert (await api_client.get(f"{API}/items/{weapon_id}")).status_code == 200
